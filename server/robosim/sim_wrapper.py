@@ -272,14 +272,35 @@ class SimWrapper:
         return self._state
 
     def get_camera_obs(self) -> Optional[dict]:
-        """Return camera observations if using real sim."""
-        if not self.use_stub and self._env is not None:
+        """
+        Return camera observations + vision-extracted symbolic state.
+
+        Stub mode:   returns None (symbolic state comes from sim config directly)
+        Real mode:   returns RGB images + runs vision.py to extract object positions
+
+        The planning layer above never needs to know which path ran —
+        it always receives the same symbolic SimState either way.
+        """
+        if self.use_stub:
+            return None  # stub: symbolic state already in self._state, no camera needed
+
+        if self._env is not None:
             obs = self._env._get_observations()
-            return {
-                "frontview": obs.get("frontview_image"),
-                "agentview": obs.get("agentview_image"),
-            }
-        return None
+            rgb_front = obs.get("frontview_image")
+            rgb_agent = obs.get("agentview_image")
+
+            # Run vision pipeline to get symbolic state from images
+            if rgb_front is not None and self._current_cfg is not None:
+                from .vision import sim_vision
+                vision_result = sim_vision(rgb_front)
+                # Merge detected positions back into symbolic state
+                # (perception layer updates what was set from physics)
+                for det in vision_result.detected_objects:
+                    name = det["name"]
+                    if name in self._state.objects:
+                        self._state.objects[name].pos = np.array([det["x"], det["y"], det["z"]])
+
+            return {"frontview": rgb_front, "agentview": rgb_agent}
 
 
 # ── Re-exports ─────────────────────────────────────────────────────────
