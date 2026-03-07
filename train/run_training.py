@@ -189,6 +189,14 @@ print("=" * 50)
 # GRPO directly from base model
 
 def reward_fn(completions, prompts=None, scenario=None, **kwargs):
+    if not hasattr(reward_fn, "_calls"):
+        reward_fn._calls = 0
+    reward_fn._calls += 1
+
+    batch_actions = []
+    batch_rewards = []
+    batch_results = []
+    batch_oracles = []
     rewards = []
     for i, completion in enumerate(completions):
         text      = completion if isinstance(completion, str) else completion[0].get('content', '')
@@ -201,7 +209,12 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
         try:
             valid_actions, last_action, last_result = parse_prompt_context(prompts[i] if prompts else None)
             if valid_actions and action not in valid_actions:
-                rewards.append(-3.0)
+                shaped_reward = -3.0
+                rewards.append(shaped_reward)
+                batch_actions.append(action)
+                batch_rewards.append(shaped_reward)
+                batch_results.append("FAILED_INVALID")
+                batch_oracles.append(None)
                 continue
 
             eval_env = TabletopPlanningEnv(config=EnvConfig.easy())
@@ -211,6 +224,7 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             eval_env._instruction         = scen.instruction
             eval_env._required_placements = dict(scen.targets)
             eval_env._active_constraints  = [scen.constraint] if scen.constraint else []
+            oracle_action = eval_env._oracle_action()
             result = eval_env.step(action, reasoning=reasoning)
             shaped_reward = float(result.reward)
 
@@ -227,20 +241,43 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             if action == 'PICK' and last_action == 'PICK' and last_result and last_result.startswith('FAILED'):
                 shaped_reward -= 1.0
 
+            # Reward oracle alignment on this state to avoid collapsing to constant MOVE actions.
+            if oracle_action and action == oracle_action:
+                shaped_reward += 1.0
+
             rewards.append(shaped_reward)
+            batch_actions.append(action)
+            batch_rewards.append(shaped_reward)
+            batch_results.append(result.info.get("result", "UNKNOWN"))
+            batch_oracles.append(oracle_action)
         except Exception:
-            rewards.append(-1.0)
+            shaped_reward = -1.0
+            rewards.append(shaped_reward)
+            batch_actions.append(action)
+            batch_rewards.append(shaped_reward)
+            batch_results.append("EXCEPTION")
+            batch_oracles.append(None)
+
+    if reward_fn._calls % 50 == 0:
+        print(
+            "[reward-debug]",
+            f"call={reward_fn._calls}",
+            f"mean={sum(batch_rewards) / max(1, len(batch_rewards)):.3f}",
+            f"actions={batch_actions[:4]}",
+            f"results={batch_results[:4]}",
+            f"oracles={batch_oracles[:4]}",
+        )
     return rewards
 
 grpo_config = GRPOConfig(
     output_dir='./outputs/grpo',
-    num_train_epochs=3,
+    num_train_epochs=1,
     per_device_train_batch_size=4,
     gradient_accumulation_steps=4,
-    learning_rate=5e-6,
-    num_generations=4,
-    max_completion_length=16,
-    temperature=0.75,
+    learning_rate=1e-5,
+    num_generations=8,
+    max_completion_length=8,
+    temperature=1.0,
     logging_steps=5,
     save_steps=400,
     save_total_limit=2,
