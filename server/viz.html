@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Tabletop Planning Env — Live Viz</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0f0f13;
+      color: #e0e0e0;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px;
+      gap: 20px;
+    }
+    h1 { color: #7eb8f7; font-size: 1.2rem; letter-spacing: 0.05em; }
+    .layout { display: flex; gap: 24px; align-items: flex-start; width: 100%; max-width: 960px; }
+
+    /* Canvas section */
+    .canvas-wrap {
+      background: #1a1a24;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 16px;
+      flex-shrink: 0;
+    }
+    canvas { display: block; border-radius: 4px; }
+
+    /* Info panel */
+    .panel {
+      background: #1a1a24;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 16px;
+      flex: 1;
+      min-width: 260px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .panel h2 { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.1em; }
+    .instruction { color: #f0c36d; font-size: 0.9rem; line-height: 1.4; }
+    .obj-list { display: flex; flex-direction: column; gap: 6px; }
+    .obj-row {
+      display: flex; gap: 8px; align-items: center;
+      font-size: 0.8rem;
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .tag {
+      background: #2a2a36;
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 0.7rem;
+      color: #aaa;
+    }
+    .tag.blocked { background: #3a1a1a; color: #e06060; }
+    .tag.held   { background: #1a3a1a; color: #60e090; }
+    .tag.inbin  { background: #1a2a3a; color: #60a0e0; }
+
+    .log { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+    .log-row { font-size: 0.75rem; display: flex; gap: 8px; }
+    .log-row .step-num { color: #555; width: 28px; flex-shrink: 0; }
+    .log-row .act  { color: #7eb8f7; }
+    .log-row .res.ok  { color: #60e090; }
+    .log-row .res.fail { color: #e06060; }
+    .log-row .rew { color: #f0c36d; margin-left: auto; }
+
+    .stats { display: flex; gap: 16px; flex-wrap: wrap; }
+    .stat { display: flex; flex-direction: column; gap: 2px; }
+    .stat .label { font-size: 0.65rem; color: #666; text-transform: uppercase; }
+    .stat .value { font-size: 1.1rem; color: #c0d8f8; }
+
+    .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+    button {
+      background: #252535;
+      border: 1px solid #444;
+      color: #ccc;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: background 0.15s;
+    }
+    button:hover { background: #33334a; }
+    button.primary { background: #2a3a5a; border-color: #4a6a9a; color: #7eb8f7; }
+    button.danger  { background: #3a1a1a; border-color: #6a2a2a; color: #e06060; }
+    .speed-label { font-size: 0.75rem; color: #888; align-self: center; }
+
+    .subgoals .sg { font-size: 0.75rem; color: #60e090; }
+    .subgoals .sg::before { content: "✓ "; }
+    .failures .f  { font-size: 0.75rem; color: #e06060; }
+    .failures .f::before { content: "✗ "; }
+    .constraints .c { font-size: 0.75rem; color: #f0c36d; }
+    .constraints .c::before { content: "⚠ "; }
+
+    .holding-banner {
+      background: #1a3a1a;
+      border: 1px solid #2a6a2a;
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 0.8rem;
+      color: #60e090;
+    }
+    .done-banner {
+      background: #1a2a3a;
+      border: 1px solid #2a5a8a;
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-size: 0.9rem;
+      color: #60c0ff;
+      text-align: center;
+    }
+    .reward-bar-wrap { display: flex; flex-direction: column; gap: 4px; }
+    .reward-bar-bg { background: #222; border-radius: 4px; height: 8px; overflow: hidden; }
+    .reward-bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s, background 0.3s; }
+  </style>
+</head>
+<body>
+  <h1>Tabletop Planning Environment — Live Visualization</h1>
+
+  <div class="layout">
+    <!-- Canvas: top-down tabletop view -->
+    <div class="canvas-wrap">
+      <canvas id="canvas" width="400" height="400"></canvas>
+    </div>
+
+    <!-- Info panel -->
+    <div class="panel">
+      <div>
+        <h2>Instruction</h2>
+        <div class="instruction" id="instruction">—</div>
+      </div>
+
+      <div>
+        <h2>Scene Objects</h2>
+        <div class="obj-list" id="obj-list"></div>
+      </div>
+
+      <div id="holding-section" style="display:none">
+        <div class="holding-banner" id="holding-text"></div>
+      </div>
+
+      <div>
+        <h2>Constraints</h2>
+        <div class="constraints" id="constraints"></div>
+      </div>
+
+      <div>
+        <h2>Completed</h2>
+        <div class="subgoals" id="subgoals"></div>
+      </div>
+
+      <div>
+        <h2>Known Failures</h2>
+        <div class="failures" id="failures"></div>
+      </div>
+
+      <div>
+        <h2>Stats</h2>
+        <div class="stats">
+          <div class="stat"><div class="label">Steps left</div><div class="value" id="steps">—</div></div>
+          <div class="stat"><div class="label">Total reward</div><div class="value" id="reward">0.00</div></div>
+          <div class="stat"><div class="label">Episode</div><div class="value" id="episode">1</div></div>
+        </div>
+        <div class="reward-bar-wrap" style="margin-top:8px">
+          <div style="font-size:0.65rem;color:#666">REWARD</div>
+          <div class="reward-bar-bg"><div class="reward-bar-fill" id="reward-bar" style="width:50%;background:#4a8a4a"></div></div>
+        </div>
+      </div>
+
+      <div id="done-section" style="display:none">
+        <div class="done-banner" id="done-text"></div>
+      </div>
+
+      <div>
+        <h2>Action Log</h2>
+        <div class="log" id="action-log"></div>
+      </div>
+
+      <div>
+        <h2>Controls</h2>
+        <div class="controls">
+          <button class="primary" onclick="resetEp()">Reset Episode</button>
+          <button onclick="togglePlay()" id="play-btn">▶ Run</button>
+          <button class="danger" onclick="stopAll()">■ Stop</button>
+          <span class="speed-label">Speed:</span>
+          <select id="speed" style="background:#252535;color:#ccc;border:1px solid #444;border-radius:4px;padding:4px">
+            <option value="600">Slow</option>
+            <option value="300" selected>Normal</option>
+            <option value="100">Fast</option>
+            <option value="30">Max</option>
+          </select>
+        </div>
+        <div style="margin-top:10px">
+          <h2 style="margin-bottom:6px">Manual Step</h2>
+          <div class="controls" id="manual-buttons"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const BASE = 'http://localhost:7860';
+const COLORS = {
+  red_block:   '#e05555',
+  blue_block:  '#5599e0',
+  green_block: '#55c055',
+  gripper:     '#f0c36d',
+  bin_a:       '#8855cc',
+  bin_b:       '#cc8855',
+  table:       '#2a2a1a',
+};
+const ACTIONS = ['SCAN_SCENE','MOVE_TO_RED','MOVE_TO_BLUE','MOVE_TO_GREEN','PICK','PLACE_BIN_A','PLACE_BIN_B','CLEAR_BLOCKER'];
+
+let state = null;
+let totalReward = 0;
+let playing = false;
+let playTimer = null;
+let episodeCount = 1;
+let stepCount = 0;
+
+// Simulated positions for top-down canvas (stub doesn't give real x,y,z)
+const SIM_POS = {
+  red_block:   {x: 0.10, y: 0.00},
+  blue_block:  {x: 0.00, y: 0.00},
+  green_block: {x:-0.10, y: 0.00},
+  gripper:     {x: 0.00, y: 0.25},
+  bin_a:       {x: 0.18, y:-0.20},
+  bin_b:       {x:-0.18, y:-0.20},
+};
+
+// Build manual action buttons
+const btns = document.getElementById('manual-buttons');
+ACTIONS.forEach(a => {
+  const b = document.createElement('button');
+  b.textContent = a.replace(/_/g,' ');
+  b.onclick = () => doStep(a);
+  btns.appendChild(b);
+});
+
+// ---------- Canvas rendering ----------
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+function worldToCanvas(wx, wy) {
+  // world range roughly -0.35..0.35 → canvas 20..380
+  const cx = W/2 + wx * 600;
+  const cy = H/2 - wy * 600;
+  return [cx, cy];
+}
+
+function drawScene(obs) {
+  ctx.clearRect(0, 0, W, H);
+
+  // Table background
+  ctx.fillStyle = '#1e1e14';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid lines
+  ctx.strokeStyle = '#2a2a20';
+  ctx.lineWidth = 1;
+  for (let i = -5; i <= 5; i++) {
+    const [x1,y1] = worldToCanvas(i*0.07, -0.4);
+    const [x2,y2] = worldToCanvas(i*0.07,  0.4);
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    const [x3,y3] = worldToCanvas(-0.4, i*0.07);
+    const [x4,y4] = worldToCanvas( 0.4, i*0.07);
+    ctx.beginPath(); ctx.moveTo(x3,y3); ctx.lineTo(x4,y4); ctx.stroke();
+  }
+
+  // Bins
+  [['bin_a', 'A'], ['bin_b', 'B']].forEach(([key, label]) => {
+    const p = SIM_POS[key];
+    const [cx,cy] = worldToCanvas(p.x, p.y);
+    ctx.strokeStyle = COLORS[key];
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cx-28, cy-28, 56, 56);
+    ctx.fillStyle = COLORS[key] + '22';
+    ctx.fillRect(cx-28, cy-28, 56, 56);
+    ctx.fillStyle = COLORS[key];
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Bin ' + label, cx, cy+5);
+  });
+
+  // Objects
+  if (obs) {
+    obs.visible_objects.forEach(obj => {
+      const p = SIM_POS[obj.name];
+      if (!p) return;
+      const [cx,cy] = worldToCanvas(p.x, p.y);
+      const color = COLORS[obj.name] || '#aaa';
+      const held = obj.name === obs.holding;
+      const blocked = !obj.reachable;
+
+      // Shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.fillRect(cx-18+3, cy-18+3, 36, 36);
+
+      // Box
+      ctx.fillStyle = blocked ? color + '55' : (held ? color + 'cc' : color + 'aa');
+      ctx.fillRect(cx-18, cy-18, 36, 36);
+
+      // Border
+      ctx.strokeStyle = held ? '#ffffff' : (blocked ? '#555' : color);
+      ctx.lineWidth = held ? 3 : 1.5;
+      ctx.strokeRect(cx-18, cy-18, 36, 36);
+
+      // Blocked X
+      if (blocked) {
+        ctx.strokeStyle = '#e06060';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(cx-12,cy-12); ctx.lineTo(cx+12,cy+12); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(cx+12,cy-12); ctx.lineTo(cx-12,cy+12); ctx.stroke();
+      }
+
+      // Label
+      ctx.fillStyle = '#fff';
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(obj.name.replace('_block','').toUpperCase(), cx, cy+4);
+      if (held) ctx.fillText('HELD', cx, cy+14);
+    });
+  }
+
+  // Gripper
+  const gp = SIM_POS['gripper'];
+  const [gx,gy] = worldToCanvas(gp.x, gp.y);
+  ctx.strokeStyle = COLORS['gripper'];
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(gx, gy, 12, 0, Math.PI*2);
+  ctx.stroke();
+  ctx.fillStyle = COLORS['gripper'] + '44';
+  ctx.fill();
+  ctx.fillStyle = COLORS['gripper'];
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('⊕', gx, gy+4);
+
+  // Legend
+  ctx.fillStyle = '#555';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('Top-down view', 8, H-8);
+}
+
+// ---------- UI update ----------
+function updateUI(obs, reward, done, info) {
+  if (!obs) return;
+  state = obs;
+
+  document.getElementById('instruction').textContent = obs.instruction;
+  document.getElementById('steps').textContent = obs.steps_remaining;
+  document.getElementById('episode').textContent = episodeCount;
+  document.getElementById('reward').textContent = totalReward.toFixed(2);
+
+  // Reward bar
+  const norm = Math.min(1, Math.max(0, (totalReward + 5) / 20));
+  const bar = document.getElementById('reward-bar');
+  bar.style.width = (norm * 100) + '%';
+  bar.style.background = totalReward >= 0 ? '#4a8a4a' : '#8a3a3a';
+
+  // Objects
+  const ol = document.getElementById('obj-list');
+  ol.innerHTML = obs.visible_objects.map(o => {
+    const color = COLORS[o.name] || '#aaa';
+    const tags = [];
+    if (!o.reachable) tags.push('<span class="tag blocked">blocked</span>');
+    if (o.name === obs.holding) tags.push('<span class="tag held">held</span>');
+    return `<div class="obj-row">
+      <div class="dot" style="background:${color}"></div>
+      <span>${o.name}</span>
+      ${tags.join('')}
+    </div>`;
+  }).join('');
+
+  // Holding
+  const hs = document.getElementById('holding-section');
+  if (obs.holding) {
+    hs.style.display = '';
+    document.getElementById('holding-text').textContent = `Holding: ${obs.holding}`;
+  } else {
+    hs.style.display = 'none';
+  }
+
+  // Constraints
+  document.getElementById('constraints').innerHTML =
+    obs.active_constraints.map(c => `<div class="c">${c}</div>`).join('') || '<div style="color:#555;font-size:0.75rem">none</div>';
+
+  // Subgoals
+  document.getElementById('subgoals').innerHTML =
+    obs.completed_subgoals.map(s => `<div class="sg">${s}</div>`).join('') || '<div style="color:#555;font-size:0.75rem">none yet</div>';
+
+  // Failures
+  document.getElementById('failures').innerHTML =
+    obs.known_failures.map(f => `<div class="f">${f}</div>`).join('') || '<div style="color:#555;font-size:0.75rem">none</div>';
+
+  // Action log
+  if (info && obs.last_action) {
+    const log = document.getElementById('action-log');
+    const isOk = obs.last_result && obs.last_result.startsWith('SUCCESS');
+    const row = document.createElement('div');
+    row.className = 'log-row';
+    row.innerHTML = `
+      <span class="step-num">#${stepCount}</span>
+      <span class="act">${obs.last_action}</span>
+      <span class="res ${isOk ? 'ok' : 'fail'}">${obs.last_result || ''}</span>
+      <span class="rew">${reward != null ? (reward >= 0 ? '+' : '') + reward.toFixed(2) : ''}</span>
+    `;
+    log.prepend(row);
+    if (log.children.length > 30) log.removeChild(log.lastChild);
+  }
+
+  // Done banner
+  const ds = document.getElementById('done-section');
+  if (done) {
+    ds.style.display = '';
+    const success = totalReward > 5;
+    document.getElementById('done-text').textContent =
+      success ? '✓ Task Complete! Reward: ' + totalReward.toFixed(2)
+               : '✗ Episode ended. Reward: ' + totalReward.toFixed(2);
+    if (playing) stopAll();
+  } else {
+    ds.style.display = 'none';
+  }
+
+  drawScene(obs);
+}
+
+// ---------- API calls ----------
+async function resetEp() {
+  stopAll();
+  const res = await fetch(BASE + '/reset', {method: 'POST'});
+  const obs = await res.json();
+  totalReward = 0;
+  stepCount = 0;
+  episodeCount++;
+  updateUI(obs, 0, false, null);
+  document.getElementById('action-log').innerHTML = '';
+}
+
+async function doStep(action) {
+  if (!state) { await resetEp(); return; }
+  const res = await fetch(BASE + '/step', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action})
+  });
+  const result = await res.json();
+  totalReward += result.reward;
+  stepCount++;
+  updateUI(result.observation, result.reward, result.done, result.info);
+  return result.done;
+}
+
+// Scripted agent (mirrors Python logic)
+function scriptedAction(obs) {
+  const failures = new Set(obs.known_failures);
+  const reachable = {};
+  obs.visible_objects.forEach(o => reachable[o.name] = o.reachable);
+  const completed = new Set(obs.completed_subgoals);
+
+  if (obs.last_action && obs.last_action.startsWith('MOVE_TO') && obs.last_result === 'SUCCESS') return 'PICK';
+  if (obs.holding === 'red_block') return 'PLACE_BIN_A';
+  if (obs.holding === 'green_block') return 'PLACE_BIN_B';
+  if (failures.has('MOVE_TO_RED:FAILED_BLOCKED') || failures.has('PICK:FAILED_EMPTY')) return 'CLEAR_BLOCKER';
+  if (!completed.has('placed_red_block_in_bin_A')) {
+    if (reachable['red_block']) return 'MOVE_TO_RED';
+    return 'CLEAR_BLOCKER';
+  }
+  if (!completed.has('placed_green_block_in_bin_B') && reachable['green_block']) return 'MOVE_TO_GREEN';
+  return 'SCAN_SCENE';
+}
+
+async function playLoop() {
+  if (!playing) return;
+  if (!state) await resetEp();
+  const action = scriptedAction(state);
+  const done = await doStep(action);
+  if (!done && playing) {
+    const delay = parseInt(document.getElementById('speed').value);
+    playTimer = setTimeout(playLoop, delay);
+  }
+}
+
+function togglePlay() {
+  const btn = document.getElementById('play-btn');
+  if (playing) {
+    playing = false;
+    clearTimeout(playTimer);
+    btn.textContent = '▶ Run';
+  } else {
+    playing = true;
+    btn.textContent = '⏸ Pause';
+    playLoop();
+  }
+}
+
+function stopAll() {
+  playing = false;
+  clearTimeout(playTimer);
+  document.getElementById('play-btn').textContent = '▶ Run';
+}
+
+// Init
+resetEp();
+</script>
+</body>
+</html>
