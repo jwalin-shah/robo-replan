@@ -1,118 +1,181 @@
 """
-Wraps robosuite to expose a high-level symbolic interface for the planning environment.
+SimWrapper — physics backend for RoboReplan.
 
-This keeps the model from having to deal with raw joint states or image tensors.
-It translates high-level actions (e.g. PICK, CLEAR_BLOCKER) into robosuite motions
-and reads back symbolic world state.
+Two modes:
+  use_stub=False  Real MuJoCo + robosuite PickPlace environment.
+                  Object positions, blocking, and grasp success come from
+                  actual physics. This is what makes training meaningful.
+
+  use_stub=True   Lightweight Python sim for fast local testing.
+                  Same interface, no physics dependency.
+
+The wrapper always exposes the same symbolic SimState so the planning
+layer above never needs to know which backend is running.
 """
 import random
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional
+
 from .randomizer import randomize_scenario, ScenarioConfig
 
+
+# ── Symbolic state types ───────────────────────────────────────────────
 
 @dataclass
 class ObjectState:
     name: str
-    pos: np.ndarray          # (x, y, z)
+    pos: np.ndarray
     reachable: bool = True
-    blocking: Optional[str] = None  # name of object being blocked
-    in_bin: Optional[str] = None    # "A" or "B"
+    blocking: Optional[str] = None
+    in_bin: Optional[str] = None
     is_held: bool = False
 
 
 @dataclass
 class SimState:
-    objects: dict[str, ObjectState] = field(default_factory=dict)
+    objects: dict = field(default_factory=dict)
     gripper_pos: np.ndarray = field(default_factory=lambda: np.zeros(3))
     gripper_open: bool = True
     holding: Optional[str] = None
 
 
+# ── Main wrapper ───────────────────────────────────────────────────────
+
 class SimWrapper:
     """
-    Wraps robosuite environment and exposes symbolic state + high-level actions.
-    Falls back to a lightweight stub when robosuite is not installed, so you
-    can test env logic without a full sim install.
+    Wraps either robosuite (real) or a Python stub (fast testing).
+    Always produces symbolic SimState for the planning layer.
     """
 
-    def __init__(self, use_stub: bool = False):
+    def __init__(self, use_stub: bool = True):
         self.use_stub = use_stub
         self._env = None
+        self._controller = None
         self._state = SimState()
-        self._setup()
+        self._last_moved_to: Optional[str] = None
+        self._current_cfg: Optional[ScenarioConfig] = None
 
-    def _setup(self):
-        if self.use_stub:
-            self._init_stub()
-            return
+        if not use_stub:
+            self._init_robosuite()
+
+    # ── Init ───────────────────────────────────────────────────────────
+
+    def _init_robosuite(self):
+        """
+        Initialize a real robosuite PickPlace environment.
+
+        We use PickPlace because it already has:
+        - Panda arm (most standard research robot)
+        - Multiple objects with real physics
+        - Multiple bin targets
+        - OSC_POSE controller (operational space — moves in Cartesian coords,
+          which our high-level controller can use directly)
+        """
         try:
             import robosuite as suite
             from robosuite.controllers import load_composite_controller_config
+
             controller_config = load_composite_controller_config(controller="BASIC")
+
             self._env = suite.make(
-                "Lift",
+                env_name="PickPlace",
                 robots="Panda",
                 controller_configs=controller_config,
-                has_renderer=False,
-                has_offscreen_renderer=False,
-                use_camera_obs=False,
-                reward_shaping=False,
+                has_renderer=False,           # no display on server
+                has_offscreen_renderer=True,  # needed for camera obs
+                use_camera_obs=True,
+                camera_names=["frontview", "agentview"],
+                camera_heights=128,
+                camera_widths=128,
+                reward_shaping=False,         # we compute our own reward
                 control_freq=20,
+                single_object_mode=0,         # all objects
+                object_type=None,             # random objects
             )
-            print("[SimWrapper] robosuite loaded")
-        except ImportError:
-            print("[SimWrapper] robosuite not installed, using stub")
-            self.use_stub = True
-            self._init_stub()
 
-    def _init_stub(self):
-        """Minimal fake world for testing env logic without robosuite."""
-        self._state = SimState(
-            objects={
-                "red_block":   ObjectState("red_block",  np.array([0.1,  0.0, 0.82]), reachable=False, blocking=None),
-                "blue_block":  ObjectState("blue_block", np.array([0.0,  0.0, 0.82]), reachable=True,  blocking="red_block"),
-                "green_block": ObjectState("green_block",np.array([-0.1, 0.0, 0.82]), reachable=True),
-            },
-            gripper_pos=np.array([0.0, 0.3, 1.0]),
-            gripper_open=True,
-            holding=None,
-        )
+            from .controller import MotionController
+            self._controller = MotionController(self._env)
+            print("[SimWrapper] robosuite PickPlace loaded (Panda arm)")
+
+        except ImportError:
+            print("[SimWrapper] robosuite not installed → falling back to stub")
+            self.use_stub = True
+        except Exception as e:
+            print(f"[SimWrapper] robosuite init failed: {e} → falling back to stub")
+            self.use_stub = True
+
+    # ── Reset ──────────────────────────────────────────────────────────
 
     def reset(self, scenario: str = "random") -> tuple[SimState, ScenarioConfig]:
-        """Reset the scene with a randomized or fixed scenario."""
+        """Reset scene. Returns (SimState, ScenarioConfig)."""
+        force_blocked = random.random() < 0.6
+        cfg = randomize_scenario(force_blocked=force_blocked)
+
         if not self.use_stub and self._env is not None:
-            self._env.reset()
-
-        if scenario == "random":
-            cfg = randomize_scenario(force_blocked=random.random() < 0.6)
-        elif scenario == "blocked":
-            cfg = randomize_scenario(n_objects=3, n_targets=1, n_blockers=1, force_blocked=True)
-        elif scenario == "unblocked":
-            cfg = randomize_scenario(n_objects=3, n_targets=1, n_blockers=0)
+            self._reset_robosuite(cfg)
         else:
-            cfg = randomize_scenario()
+            self._build_state_from_config(cfg)
 
-        self._build_state_from_config(cfg)
         return self._state, cfg
 
-    def get_last_moved_to(self) -> str | None:
-        return getattr(self, "_last_moved_to", None)
+    def _reset_robosuite(self, cfg: ScenarioConfig):
+        """Reset robosuite and sync symbolic state from physics."""
+        obs = self._env.reset()
+        self._sync_state_from_obs(obs, cfg)
+
+    def _sync_state_from_obs(self, obs: dict, cfg: ScenarioConfig):
+        """
+        Extract symbolic state from robosuite observation dict.
+        Uses the perception layer to detect blocking from real 3D positions.
+        """
+        try:
+            from .perception import extract_scene
+            scene = extract_scene(
+                mj_data=self._env.sim.data,
+                mj_model=self._env.sim.model,
+                robot_name="robot0",
+                object_names=list(cfg.objects),
+            )
+            objects = {}
+            for name, p in scene.objects.items():
+                objects[name] = ObjectState(
+                    name=name,
+                    pos=p.pos,
+                    reachable=p.reachable,
+                    blocking=p.blocking,
+                    in_bin=p.in_bin,
+                    is_held=p.is_held,
+                )
+            self._state = SimState(
+                objects=objects,
+                gripper_pos=scene.gripper_pos,
+                gripper_open=scene.gripper_open,
+                holding=scene.holding,
+            )
+        except Exception as e:
+            print(f"[SimWrapper] perception sync failed: {e}, using stub fallback")
+            self._build_state_from_config(cfg)
+
+        self._current_cfg = cfg
+
+    # ── Stub state builder ─────────────────────────────────────────────
+
+    def get_last_moved_to(self) -> Optional[str]:
+        return self._last_moved_to
 
     def _build_state_from_config(self, cfg: ScenarioConfig):
-        """Build SimState from a ScenarioConfig."""
+        """Build stub SimState from randomized scenario config."""
         self._last_moved_to = None
         objects = {}
         for obj_name in cfg.objects:
             x, y = cfg.positions.get(obj_name, (0.0, 0.0))
-            # blocked = something else is blocking this object
             is_blocked = obj_name in cfg.blockers.values()
             objects[obj_name] = ObjectState(
                 name=obj_name,
                 pos=np.array([x, y, 0.82]),
                 reachable=not is_blocked,
-                blocking=cfg.blockers.get(obj_name),  # what this object is blocking
+                blocking=cfg.blockers.get(obj_name),
             )
         self._state = SimState(
             objects=objects,
@@ -122,21 +185,28 @@ class SimWrapper:
         )
         self._current_cfg = cfg
 
-    def get_state(self) -> SimState:
-        return self._state
+    # ── Execute action ─────────────────────────────────────────────────
 
     def execute(self, action: str) -> str:
-        """
-        Execute a high-level action.
-        Returns one of:
-          SUCCESS | FAILED_BLOCKED | FAILED_EMPTY | FAILED_INVALID | FAILED_WRONG_TARGET
-        """
+        """Execute a high-level action. Returns result string."""
+        if not self.use_stub and self._env is not None and self._controller is not None:
+            return self._execute_real(action)
+        return self._execute_stub(action)
+
+    def _execute_real(self, action: str) -> str:
+        """Execute via real robosuite physics + motion controller."""
+        result = self._controller.execute(action)
+        # Re-sync symbolic state from physics
+        obs = self._env._get_observations()
+        if self._current_cfg:
+            self._sync_state_from_obs(obs, self._current_cfg)
+        return result
+
+    def _execute_stub(self, action: str) -> str:
+        """Execute in the lightweight Python stub."""
         s = self._state
 
         if action == "SCAN_SCENE":
-            # Scan reveals hidden info but costs a step
-            for obj in s.objects.values():
-                obj.reachable = obj.reachable  # in real sim would update from perception
             return "SUCCESS"
 
         elif action.startswith("MOVE_TO_"):
@@ -148,18 +218,18 @@ class SimWrapper:
             if not obj.reachable:
                 return "FAILED_BLOCKED"
             s.gripper_pos = obj.pos.copy() + np.array([0, 0, 0.05])
-            self._last_moved_to = name  # track for PICK disambiguation
+            self._last_moved_to = name
             return "SUCCESS"
 
         elif action == "PICK":
             if s.holding is not None:
                 return "FAILED_INVALID"
-            # Prefer the object we last moved to (avoids grabbing wrong nearby obj)
             candidates = []
             for obj in s.objects.values():
                 if obj.reachable and not obj.is_held and obj.in_bin is None:
                     dist = np.linalg.norm(s.gripper_pos[:2] - obj.pos[:2])
                     candidates.append((dist, obj))
+            # Prefer the object we last moved to
             candidates.sort(key=lambda x: (
                 0 if x[1].name == self._last_moved_to else 1, x[0]
             ))
@@ -186,15 +256,32 @@ class SimWrapper:
             return "SUCCESS"
 
         elif action == "CLEAR_BLOCKER":
-            # Remove a blocking object from in front of the target
             for obj in s.objects.values():
                 if obj.blocking is not None and obj.reachable:
                     blocked_name = obj.blocking
                     obj.blocking = None
-                    obj.pos = obj.pos + np.array([0.3, 0, 0])  # push aside
+                    obj.pos = obj.pos + np.array([0.28, 0.1, 0])
                     if blocked_name in s.objects:
                         s.objects[blocked_name].reachable = True
                     return "SUCCESS"
             return "FAILED_INVALID"
 
         return "FAILED_INVALID"
+
+    def get_state(self) -> SimState:
+        return self._state
+
+    def get_camera_obs(self) -> Optional[dict]:
+        """Return camera observations if using real sim."""
+        if not self.use_stub and self._env is not None:
+            obs = self._env._get_observations()
+            return {
+                "frontview": obs.get("frontview_image"),
+                "agentview": obs.get("agentview_image"),
+            }
+        return None
+
+
+# ── Re-exports ─────────────────────────────────────────────────────────
+
+__all__ = ["SimWrapper", "SimState", "ObjectState"]
