@@ -15,6 +15,7 @@ from .environment import TabletopPlanningEnv as _InternalEnv
 
 class RoboAction(Action):
     action: str
+    reasoning: str = ""   # <think>...</think> content from the model
 
 
 class RoboObservation(Observation):
@@ -48,7 +49,10 @@ SYSTEM = (
     "You are a robot planning agent on a tabletop. "
     "Complete manipulation tasks by choosing ONE action per step.\n\n"
     "Actions: SCAN_SCENE | MOVE_TO_<COLOR> | PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER\n\n"
-    "Reply with ONLY the action name."
+    "Think step by step inside <think>...</think> tags, then output ONLY the action name.\n"
+    "Example:\n"
+    "<think>Red block is blocked by blue. I must clear blue first, then pick red, then place in bin A.</think>\n"
+    "CLEAR_BLOCKER"
 )
 
 
@@ -126,7 +130,7 @@ class RoboReplanEnv(Environment[RoboAction, RoboObservation, RoboState]):
         return obs
 
     def step(self, action: RoboAction, timeout_s=None, **kwargs) -> RoboObservation:
-        result = self._env.step(action.action)
+        result = self._env.step(action.action, reasoning=action.reasoning or "")
         self._total_reward += result.reward
         self._step_count += 1
         obs = self._wrap(result.observation, done=result.done, reward=result.reward,

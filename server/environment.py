@@ -34,7 +34,12 @@ class TabletopPlanningEnv:
         self._reset_internal()
         return self._build_obs(last_action=None, last_result=None)
 
-    def step(self, action: str) -> StepResult:
+    def step(self, action: str, reasoning: str = "") -> StepResult:
+        """
+        action:    the high-level action string
+        reasoning: optional <think>...</think> chain-of-thought from the model.
+                   Rewarded if it mentions the right objects and constraints.
+        """
         if self._done:
             raise RuntimeError("Episode is done. Call reset() first.")
 
@@ -63,6 +68,7 @@ class TabletopPlanningEnv:
 
         self._steps += 1
         reward = self._compute_reward(action, result)
+        reward += self._reasoning_bonus(reasoning, action, result)
         self._cumulative_reward += reward
         self._update_planning_state(action, result)
 
@@ -147,6 +153,49 @@ class TabletopPlanningEnv:
         )
 
     # ── Reward ──────────────────────────────────────────────────────────
+
+    def _reasoning_bonus(self, reasoning: str, action: str, result: str) -> float:
+        """
+        Small bonus for reasoning that mentions relevant objects/constraints.
+        Encourages the model to develop coherent internal planning language.
+        Not large enough to game — just nudges toward explainable behavior.
+        """
+        if not reasoning or len(reasoning) < 10:
+            return 0.0
+        bonus = 0.0
+        r = reasoning.lower()
+        state = self.sim.get_state()
+
+        # Mentions blocked objects correctly
+        for obj in state.objects.values():
+            if not obj.reachable and obj.name.replace("_block", "") in r:
+                bonus += 0.1
+
+        # Mentions the target object and correct bin
+        for obj_name, bin_name in self._required_placements.items():
+            color = obj_name.replace("_block", "")
+            if color in r and f"bin {bin_name.lower()}" in r:
+                bonus += 0.2
+
+        # Mentions relevant constraint
+        for c in self._active_constraints:
+            if c.replace("_", " ") in r:
+                bonus += 0.1
+
+        # Mentions the chosen action or its intent
+        action_words = {
+            "CLEAR_BLOCKER": ["clear", "move", "push", "unblock"],
+            "PICK": ["pick", "grab", "grasp", "lift"],
+            "PLACE_BIN_A": ["place", "put", "bin a"],
+            "PLACE_BIN_B": ["place", "put", "bin b"],
+            "SCAN_SCENE": ["scan", "look", "inspect", "check"],
+        }
+        for word in action_words.get(action, []):
+            if word in r:
+                bonus += 0.1
+                break
+
+        return min(bonus, 0.5)  # cap at 0.5 so it never dominates task reward
 
     def _compute_reward(self, action: str, result: str) -> float:
         w = self.cfg.reward
