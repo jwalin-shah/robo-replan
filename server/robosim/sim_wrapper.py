@@ -97,8 +97,12 @@ class SimWrapper:
         self._build_state_from_config(cfg)
         return self._state, cfg
 
+    def get_last_moved_to(self) -> str | None:
+        return getattr(self, "_last_moved_to", None)
+
     def _build_state_from_config(self, cfg: ScenarioConfig):
         """Build SimState from a ScenarioConfig."""
+        self._last_moved_to = None
         objects = {}
         for obj_name in cfg.objects:
             x, y = cfg.positions.get(obj_name, (0.0, 0.0))
@@ -136,7 +140,6 @@ class SimWrapper:
             return "SUCCESS"
 
         elif action.startswith("MOVE_TO_"):
-            # MOVE_TO_RED -> red_block, MOVE_TO_YELLOW -> yellow_block, etc.
             color = action[len("MOVE_TO_"):].lower()
             name = color + "_block"
             if name not in s.objects:
@@ -145,20 +148,29 @@ class SimWrapper:
             if not obj.reachable:
                 return "FAILED_BLOCKED"
             s.gripper_pos = obj.pos.copy() + np.array([0, 0, 0.05])
+            self._last_moved_to = name  # track for PICK disambiguation
             return "SUCCESS"
 
         elif action == "PICK":
             if s.holding is not None:
                 return "FAILED_INVALID"
-            # find closest reachable object
+            # Prefer the object we last moved to (avoids grabbing wrong nearby obj)
+            candidates = []
             for obj in s.objects.values():
                 if obj.reachable and not obj.is_held and obj.in_bin is None:
                     dist = np.linalg.norm(s.gripper_pos[:2] - obj.pos[:2])
-                    if dist < 0.12:
-                        obj.is_held = True
-                        s.holding = obj.name
-                        s.gripper_open = False
-                        return "SUCCESS"
+                    candidates.append((dist, obj))
+            candidates.sort(key=lambda x: (
+                0 if x[1].name == self._last_moved_to else 1, x[0]
+            ))
+            for _, obj in candidates:
+                dist = np.linalg.norm(s.gripper_pos[:2] - obj.pos[:2])
+                if dist < 0.15:
+                    obj.is_held = True
+                    s.holding = obj.name
+                    s.gripper_open = False
+                    self._last_moved_to = None
+                    return "SUCCESS"
             return "FAILED_EMPTY"
 
         elif action in ("PLACE_BIN_A", "PLACE_BIN_B"):

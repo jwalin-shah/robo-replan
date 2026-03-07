@@ -1,32 +1,34 @@
 """
-TabletopPlanningEnv — OpenEnv environment for multi-step robotic task planning.
+TabletopPlanningEnv — fully instrumented RL training environment.
 
-The agent must complete manipulation tasks (place target objects in bins) while
-handling blockers, hidden state, and mid-task constraint changes.
-
-This is the planning challenge — not low-level control. The sim handles motion.
+Every knob lives in EnvConfig. Every step is logged. Curriculum auto-advances.
+The observation tells the model everything it needs to plan well.
 """
 import random
 from typing import Optional
 
+from .config import EnvConfig, RealismConfig
+from .logger import EpisodeLogger
 from .models import Action, ObjectInfo, Observation, StepResult
 from .robosim import SimWrapper
-from .robosim.realism import RealismConfig, apply_action_noise, apply_world_dynamics
-
-
-MAX_STEPS = 20
+from .robosim.randomizer import randomize_scenario
 
 
 class TabletopPlanningEnv:
-    def __init__(self, use_stub: bool = True, realism: RealismConfig = None):
+    def __init__(self, config: EnvConfig = None, use_stub: bool = True):
+        self.cfg = config or EnvConfig.easy()
         self.sim = SimWrapper(use_stub=use_stub)
-        self.realism = realism or RealismConfig.easy()
-        self._scanned = False
+        self.logger = EpisodeLogger(
+            export_path=self.cfg.log.export_path,
+            max_history=self.cfg.log.max_episode_history,
+        )
+        self._episode_id = 0
+        self._cumulative_reward = 0.0
+        self._action_history: list[str] = []
+        self._mid_task_changed = False
         self._reset_internal()
 
-    # ------------------------------------------------------------------ #
-    #  OpenEnv interface                                                   #
-    # ------------------------------------------------------------------ #
+    # ── Public interface ────────────────────────────────────────────────
 
     def reset(self) -> Observation:
         self._reset_internal()
@@ -36,112 +38,180 @@ class TabletopPlanningEnv:
         if self._done:
             raise RuntimeError("Episode is done. Call reset() first.")
 
+        # Inject mid-task instruction change if configured
+        if (not self._mid_task_changed
+                and self.cfg.task.mid_task_change_prob > 0
+                and self._steps == self.cfg.task.mid_task_change_step
+                and random.random() < self.cfg.task.mid_task_change_prob
+                and not self._done):
+            self._apply_mid_task_change()
+
         raw_result = self.sim.execute(action)
+        result = self._apply_noise(action, raw_result)
 
-        # Apply real-world action noise (grasp slips, partial clears)
-        # Note: if the sim already failed, noise doesn't apply
-        result = apply_action_noise(action, raw_result, self.realism)
-
-        # FAILED_SLIP: sim already applied the pick, undo it
         if result == "FAILED_SLIP" and raw_result == "SUCCESS" and action == "PICK":
             state = self.sim.get_state()
             if state.holding:
                 state.objects[state.holding].is_held = False
                 state.holding = None
 
-        # If SCAN_SCENE succeeded, mark as scanned (reveals hidden objects)
         if action == "SCAN_SCENE" and result == "SUCCESS":
             self._scanned = True
 
-        # World dynamics: things drift between steps
-        apply_world_dynamics(self.sim.get_state().objects, self._steps, self.realism)
+        self._apply_world_drift()
+        self._action_history.append(action)
 
         self._steps += 1
         reward = self._compute_reward(action, result)
+        self._cumulative_reward += reward
         self._update_planning_state(action, result)
-        done = self._check_done()
-        obs = self._build_obs(last_action=action, last_result=result)
 
+        # Oracle hint for logging / observation
+        oracle = self._oracle_action()
+
+        if self.cfg.log.log_every_step:
+            self.logger.log_step(
+                step=self._steps,
+                action=action,
+                result=result,
+                reward=reward,
+                cumulative_reward=self._cumulative_reward,
+                valid_actions=self._valid_actions(),
+                oracle_action=oracle if self.cfg.obs.include_oracle_hint else None,
+                holding=self.sim.get_state().holding,
+                n_failures=len(self._known_failures),
+                n_subgoals=len(self._completed_subgoals),
+            )
+
+        done = self._check_done()
+        if done:
+            ep = self.logger.end_episode(success=self._all_goals_complete())
+            self.logger.metrics._current_difficulty = self.cfg.log.export_path  # track level
+
+        obs = self._build_obs(last_action=action, last_result=result)
         return StepResult(
             observation=obs,
             reward=reward,
             done=done,
-            info={"result": result, "step": self._steps},
+            info={
+                "result": result,
+                "step": self._steps,
+                "oracle_action": oracle,
+                "valid_actions": self._valid_actions(),
+                "goal_progress": self._goal_progress(),
+                "mid_task_changed": self._mid_task_changed and self._steps == self.cfg.task.mid_task_change_step + 1,
+                "cumulative_reward": self._cumulative_reward,
+            },
         )
 
-    # ------------------------------------------------------------------ #
-    #  Internal helpers                                                    #
-    # ------------------------------------------------------------------ #
+    @property
+    def metrics(self):
+        return self.logger.metrics.to_dict()
+
+    # ── Internal reset ──────────────────────────────────────────────────
 
     def _reset_internal(self):
-        _, cfg = self.sim.reset(scenario="random")
-        self._scanned = False
+        tc = self.cfg.task
+        force_blocked = random.random() < tc.force_blocked_prob
+        scenario_cfg = randomize_scenario(
+            n_objects=random.randint(tc.n_objects_min, tc.n_objects_max),
+            n_targets=random.randint(tc.n_targets_min, tc.n_targets_max),
+            n_blockers=random.randint(tc.n_blockers_min, tc.n_blockers_max),
+            force_blocked=force_blocked,
+        )
+
+        self.sim._build_state_from_config(scenario_cfg)
+        self._scenario_cfg = scenario_cfg
+
         self._steps = 0
         self._done = False
+        self._scanned = False
+        self._mid_task_changed = False
+        self._cumulative_reward = 0.0
+        self._action_history = []
         self._completed_subgoals: list[str] = []
         self._known_failures: list[str] = []
-        self._active_constraints: list[str] = ([cfg.constraint] if cfg.constraint else [])
-        self._instruction = cfg.instruction
-        self._required_placements: dict[str, str] = dict(cfg.targets)
+        self._active_constraints: list[str] = ([scenario_cfg.constraint]
+                                                if scenario_cfg.constraint else [])
+        self._instruction = scenario_cfg.instruction
+        self._required_placements: dict[str, str] = dict(scenario_cfg.targets)
+
+        self._episode_id += 1
+        self.logger.begin_episode(
+            episode_id=self._episode_id,
+            instruction=self._instruction,
+            difficulty="custom",
+            n_objects=len(scenario_cfg.objects),
+            n_blockers=len(scenario_cfg.blockers),
+            n_targets=len(scenario_cfg.targets),
+        )
+
+    # ── Reward ──────────────────────────────────────────────────────────
 
     def _compute_reward(self, action: str, result: str) -> float:
-        reward = -0.05  # step cost
+        w = self.cfg.reward
+        r = w.step_cost
 
-        if result == "FAILED_BLOCKED" or result == "FAILED_EMPTY" or result == "FAILED_INVALID":
+        if result not in ("SUCCESS", "PARTIAL_CLEAR"):
             failure_key = f"{action}:{result}"
-            if failure_key in self._known_failures:
-                reward -= 2.0  # repeated same failure
-            else:
-                reward -= 1.0
-            return reward
+            r += w.repeated_failure if failure_key in self._known_failures else w.first_failure
+            return r
 
-        # Positive events
-        if action == "CLEAR_BLOCKER" and result == "SUCCESS":
-            reward += 2.0
-            if "cleared_blocker" not in self._completed_subgoals:
-                self._completed_subgoals.append("cleared_blocker")
-
-        if action == "PICK" and result == "SUCCESS":
-            reward += 2.0
-
-        if action in ("PLACE_BIN_A", "PLACE_BIN_B") and result == "SUCCESS":
+        if action == "CLEAR_BLOCKER":
+            r += w.blocker_cleared
+        if action == "PICK":
+            r += w.successful_pick
+        if action in ("PLACE_BIN_A", "PLACE_BIN_B"):
             bin_name = "A" if action == "PLACE_BIN_A" else "B"
             state = self.sim.get_state()
             correct = any(
-                state.objects[name].in_bin == bin_name
-                for name, req_bin in self._required_placements.items()
-                if req_bin == bin_name and name in state.objects
+                state.objects[n].in_bin == bin_name
+                for n, req in self._required_placements.items()
+                if req == bin_name and n in state.objects
             )
-            reward += 2.0 if correct else -3.0
+            r += w.correct_placement if correct else w.wrong_bin
+            if not correct and self._active_constraints:
+                r += w.constraint_violation  # extra hit for constraint violation
+        if action == "SCAN_SCENE" and not self._scanned:
+            r += w.useful_scan  # first scan only
 
-        # Bonus: first useful corrective action after a failure
+        # First recovery after failure
         if self._known_failures and result == "SUCCESS" and action != "SCAN_SCENE":
             if "recovery" not in self._completed_subgoals:
-                reward += 1.0
-                self._completed_subgoals.append("recovery")
+                r += w.recovery_after_failure
 
-        # Terminal bonus if all required placements done
+        # Terminal
         if self._all_goals_complete():
-            reward += 10.0
+            r += w.task_complete
+            steps_saved = self.cfg.task.max_steps - self._steps
+            r += w.efficiency_bonus_max * (steps_saved / self.cfg.task.max_steps)
             self._done = True
 
-        return reward
+        return r
+
+    # ── Planning state ──────────────────────────────────────────────────
 
     def _update_planning_state(self, action: str, result: str):
-        if result not in ("SUCCESS",):
-            failure_key = f"{action}:{result}"
-            if failure_key not in self._known_failures:
-                self._known_failures.append(failure_key)
+        if result not in ("SUCCESS", "PARTIAL_CLEAR"):
+            key = f"{action}:{result}"
+            if key not in self._known_failures:
+                self._known_failures.append(key)
+        else:
+            if action == "CLEAR_BLOCKER" and "cleared_blocker" not in self._completed_subgoals:
+                self._completed_subgoals.append("cleared_blocker")
+            if (self._known_failures and result == "SUCCESS"
+                    and "recovery" not in self._completed_subgoals):
+                self._completed_subgoals.append("recovery")
 
         state = self.sim.get_state()
         for obj_name, bin_name in self._required_placements.items():
-            placed_key = f"placed_{obj_name}_in_bin_{bin_name}"
-            if placed_key not in self._completed_subgoals:
+            key = f"placed_{obj_name}_in_bin_{bin_name}"
+            if key not in self._completed_subgoals:
                 obj = state.objects.get(obj_name)
                 if obj and obj.in_bin == bin_name:
-                    self._completed_subgoals.append(placed_key)
+                    self._completed_subgoals.append(key)
 
-        if self._steps >= MAX_STEPS:
+        if self._steps >= self.cfg.task.max_steps:
             self._done = True
 
     def _check_done(self) -> bool:
@@ -149,25 +219,169 @@ class TabletopPlanningEnv:
 
     def _all_goals_complete(self) -> bool:
         state = self.sim.get_state()
-        for obj_name, bin_name in self._required_placements.items():
-            obj = state.objects.get(obj_name)
+        for name, bin_name in self._required_placements.items():
+            obj = state.objects.get(name)
             if not obj or obj.in_bin != bin_name:
                 return False
         return True
 
+    # ── Noise / dynamics ────────────────────────────────────────────────
+
+    def _apply_noise(self, action: str, result: str) -> str:
+        if result != "SUCCESS":
+            return result
+        rc = self.cfg.realism
+        if action == "PICK" and random.random() < rc.grasp_fail_prob:
+            return "FAILED_SLIP"
+        if action == "CLEAR_BLOCKER" and random.random() < rc.clear_partial_prob:
+            return "PARTIAL_CLEAR"
+        return result
+
+    def _apply_world_drift(self):
+        if random.random() < self.cfg.realism.object_drift_prob:
+            state = self.sim.get_state()
+            reachable = [o for o in state.objects.values()
+                         if o.reachable and not o.is_held and o.in_bin is None]
+            if reachable:
+                obj = random.choice(reachable)
+                obj.reachable = False
+
+    # ── Mid-task instruction change ─────────────────────────────────────
+
+    def _apply_mid_task_change(self):
+        """Swap one target's bin. Agent must replan."""
+        from .robosim.randomizer import BINS
+        targets = list(self._required_placements.items())
+        if not targets:
+            return
+        obj_name, old_bin = random.choice(targets)
+        new_bin = [b for b in BINS if b != old_bin][0]
+        self._required_placements[obj_name] = new_bin
+        self._mid_task_changed = True
+        # Rebuild instruction to reflect change
+        from .robosim.randomizer import OBJECT_COLORS
+        color = OBJECT_COLORS.get(obj_name, obj_name.replace("_block", ""))
+        change_note = f" [UPDATE: place the {color} block in bin {new_bin} instead.]"
+        self._instruction = self._instruction + change_note
+        self._active_constraints.append("bin_change")
+
+    # ── Valid actions ────────────────────────────────────────────────────
+
+    def _valid_actions(self) -> list[str]:
+        """Which actions make sense right now given the current state."""
+        state = self.sim.get_state()
+        valid = ["SCAN_SCENE"]
+
+        for obj in state.objects.values():
+            if obj.reachable and not obj.is_held and obj.in_bin is None:
+                color = obj.name.replace("_block", "").upper()
+                valid.append(f"MOVE_TO_{color}")
+
+        if state.holding:
+            valid += ["PLACE_BIN_A", "PLACE_BIN_B"]
+        elif any(o.reachable and not o.is_held and o.in_bin is None
+                 for o in state.objects.values()):
+            valid.append("PICK")
+
+        if any(o.blocking for o in state.objects.values() if o.reachable):
+            valid.append("CLEAR_BLOCKER")
+
+        return valid
+
+    # ── Goal progress ────────────────────────────────────────────────────
+
+    def _goal_progress(self) -> float:
+        if not self._required_placements:
+            return 1.0
+        state = self.sim.get_state()
+        done = sum(1 for name, bin_ in self._required_placements.items()
+                   if state.objects.get(name) and state.objects[name].in_bin == bin_)
+        return done / len(self._required_placements)
+
+    # ── Oracle hint ──────────────────────────────────────────────────────
+
+    def _oracle_action(self) -> Optional[str]:
+        """Scripted optimal action for current state (teaching signal)."""
+        state = self.sim.get_state()
+        failures = set(self._known_failures)
+        completed = set(self._completed_subgoals)
+        last_action = self._action_history[-1] if self._action_history else None
+
+        # Just moved to something → pick it
+        if last_action and last_action.startswith("MOVE_TO"):
+            return "PICK"
+
+        # Holding → place correctly
+        if state.holding:
+            target_bin = self._required_placements.get(state.holding)
+            if target_bin:
+                return f"PLACE_BIN_{target_bin}"
+            return "PLACE_BIN_A"
+
+        # Failed to reach a target → clear
+        if any(f.startswith("MOVE_TO") and "FAILED_BLOCKED" in f for f in failures):
+            return "CLEAR_BLOCKER"
+        if "PICK:FAILED_EMPTY" in failures:
+            return "CLEAR_BLOCKER"
+
+        # Work through required placements in order
+        for obj_name, bin_name in self._required_placements.items():
+            key = f"placed_{obj_name}_in_bin_{bin_name}"
+            if key in completed:
+                continue
+            obj = state.objects.get(obj_name)
+            if not obj or obj.in_bin:
+                continue
+            if obj.reachable:
+                color = obj_name.replace("_block", "").upper()
+                return f"MOVE_TO_{color}"
+            return "CLEAR_BLOCKER"
+
+        return "SCAN_SCENE"
+
+    # ── Observation ──────────────────────────────────────────────────────
+
     def _build_obs(self, last_action: Optional[str], last_result: Optional[str]) -> Observation:
         state = self.sim.get_state()
+        oc = self.cfg.obs
+
         visible = []
         for obj in state.objects.values():
+            # Apply observation noise
+            reachable = obj.reachable
+            if (not self._scanned and
+                    random.random() < self.cfg.realism.hidden_object_prob):
+                reachable = False
+            elif (obj.reachable and
+                  random.random() < self.cfg.realism.reachability_noise):
+                reachable = False
+
             visible.append(ObjectInfo(
                 name=obj.name,
-                reachable=obj.reachable,
-                location="unknown" if not obj.reachable and not obj.blocking else "center",
+                reachable=reachable,
+                location="unknown" if not reachable else "table",
                 blocking=obj.blocking,
             ))
+
+        # Recent action history
+        history = (self._action_history[-oc.include_action_history:]
+                   if oc.include_action_history > 0 else [])
+
+        extra = {}
+        if oc.include_valid_actions:
+            extra["valid_actions"] = self._valid_actions()
+        if oc.include_goal_progress:
+            extra["goal_progress"] = round(self._goal_progress(), 2)
+        if oc.include_oracle_hint:
+            extra["oracle_hint"] = self._oracle_action()
+        if oc.include_distance_to_goal:
+            remaining = sum(1 for n, b in self._required_placements.items()
+                            if not (state.objects.get(n) and state.objects[n].in_bin == b))
+            extra["goals_remaining"] = remaining
+
         return Observation(
             instruction=self._instruction,
-            steps_remaining=MAX_STEPS - self._steps,
+            steps_remaining=self.cfg.task.max_steps - self._steps,
             visible_objects=visible,
             holding=state.holding,
             completed_subgoals=list(self._completed_subgoals),
@@ -175,4 +389,6 @@ class TabletopPlanningEnv:
             active_constraints=list(self._active_constraints),
             last_action=last_action,
             last_result=last_result,
+            action_history=history,
+            **extra,
         )

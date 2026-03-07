@@ -1,152 +1,136 @@
 """
-RoboReplan — OpenEnv Environment
-
-Implements the OpenEnv Environment interface so this can be deployed
-to HF Spaces and consumed by TRL's GRPO trainer via AutoEnv.
+RoboReplan — OpenEnv Environment with full instrumentation.
 """
-from typing import Any, Optional
+from typing import Optional
 
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import Action, Observation
 
+from .config import EnvConfig, RealismConfig
+from .curriculum import CurriculumManager
 from .environment import TabletopPlanningEnv as _InternalEnv
-from .robosim.realism import RealismConfig
 
 
-# ── OpenEnv Action ────────────────────────────────────────────────────
+# ── OpenEnv types ────────────────────────────────────────────────────
 
 class RoboAction(Action):
-    """A single high-level robot action string."""
     action: str
 
 
-# ── OpenEnv Observation ───────────────────────────────────────────────
-
 class RoboObservation(Observation):
-    """
-    Structured observation returned at every step.
-    Text-friendly so LLMs can read it directly.
-    """
     instruction: str
     steps_remaining: int
-    visible_objects: list[dict]   # [{name, reachable, blocking, in_bin}]
-    holding: Optional[str]
-    completed_subgoals: list[str]
-    known_failures: list[str]
-    active_constraints: list[str]
-    last_action: Optional[str]
-    last_result: Optional[str]
+    visible_objects: list[dict]
+    holding: Optional[str] = None
+    completed_subgoals: list[str] = []
+    known_failures: list[str] = []
+    active_constraints: list[str] = []
+    action_history: list[str] = []
+    last_action: Optional[str] = None
+    last_result: Optional[str] = None
+    valid_actions: Optional[list[str]] = None
+    goal_progress: Optional[float] = None
+    goals_remaining: Optional[int] = None
+    oracle_hint: Optional[str] = None
+    prompt: str                          # pre-built LLM prompt
+    mid_task_changed: bool = False
 
-    # Human-readable prompt for the LLM — pre-built so the trainer
-    # doesn't need to do any formatting
-    prompt: str
-
-
-# ── OpenEnv State ─────────────────────────────────────────────────────
 
 class RoboState(RoboObservation):
     total_reward: float = 0.0
     step_count: int = 0
+    difficulty: str = "easy"
 
 
-# ── Environment ───────────────────────────────────────────────────────
+# ── Prompt builder ────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are a robot planning agent. Complete tabletop manipulation tasks by choosing one action per step.
-
-Actions: SCAN_SCENE | MOVE_TO_RED | MOVE_TO_BLUE | MOVE_TO_GREEN | MOVE_TO_YELLOW | MOVE_TO_PURPLE | PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER
-
-Reply with ONLY the action name."""
+SYSTEM = (
+    "You are a robot planning agent on a tabletop. "
+    "Complete manipulation tasks by choosing ONE action per step.\n\n"
+    "Actions: SCAN_SCENE | MOVE_TO_<COLOR> | PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER\n\n"
+    "Reply with ONLY the action name."
+)
 
 
 def _build_prompt(obs) -> str:
     objects = ", ".join(
-        f"{o.name}({'reachable' if o.reachable else 'BLOCKED'})"
+        f"{o['name']}({'reachable' if o['reachable'] else 'BLOCKED'})"
         for o in obs.visible_objects
     )
+    history = " → ".join(obs.action_history[-5:]) or "none"
     failures = "; ".join(obs.known_failures) or "none"
     subgoals = "; ".join(obs.completed_subgoals) or "none yet"
     constraints = "; ".join(obs.active_constraints) or "none"
-    return (
-        f"[SYSTEM] {SYSTEM_PROMPT}\n\n"
-        f"Instruction: {obs.instruction}\n"
-        f"Scene: {objects}\n"
-        f"Holding: {obs.holding or 'nothing'}\n"
-        f"Completed: {subgoals}\n"
-        f"Failures: {failures}\n"
-        f"Constraints: {constraints}\n"
-        f"Last: {obs.last_action or 'none'} → {obs.last_result or 'n/a'}\n"
-        f"Steps left: {obs.steps_remaining}\n\n"
-        f"Next action:"
-    )
+    valid = ", ".join(obs.valid_actions) if obs.valid_actions else "any"
+    progress = f"{obs.goal_progress:.0%}" if obs.goal_progress is not None else "?"
+
+    lines = [
+        f"[SYSTEM] {SYSTEM}",
+        "",
+        f"Instruction: {obs.instruction}",
+        f"Scene: {objects}",
+        f"Holding: {obs.holding or 'nothing'}",
+        f"Goal progress: {progress}  Goals remaining: {obs.goals_remaining}",
+        f"Completed: {subgoals}",
+        f"Failures: {failures}",
+        f"Constraints: {constraints}",
+        f"Action history: {history}",
+        f"Last step: {obs.last_action or 'none'} → {obs.last_result or 'n/a'}",
+        f"Valid actions now: {valid}",
+        f"Steps left: {obs.steps_remaining}",
+        "",
+        "Next action:",
+    ]
+    return "\n".join(lines)
 
 
-def _to_robo_obs(internal_obs, done: bool, reward: float) -> RoboObservation:
-    return RoboObservation(
-        done=done,
-        reward=reward,
-        instruction=internal_obs.instruction,
-        steps_remaining=internal_obs.steps_remaining,
-        visible_objects=[
-            {
-                "name": o.name,
-                "reachable": o.reachable,
-                "blocking": o.blocking,
-                "in_bin": None,
-            }
-            for o in internal_obs.visible_objects
-        ],
-        holding=internal_obs.holding,
-        completed_subgoals=internal_obs.completed_subgoals,
-        known_failures=internal_obs.known_failures,
-        active_constraints=internal_obs.active_constraints,
-        last_action=internal_obs.last_action,
-        last_result=internal_obs.last_result,
-        prompt=_build_prompt(internal_obs),
-    )
-
+# ── Environment ───────────────────────────────────────────────────────
 
 class RoboReplanEnv(Environment[RoboAction, RoboObservation, RoboState]):
     """
-    RoboReplan: tabletop robot planning environment.
-
-    The agent receives a natural-language instruction and a structured
-    observation of the scene, then chooses high-level actions to complete
-    multi-step manipulation tasks under partial observability and noise.
+    RoboReplan with curriculum, logging, mid-task changes, and oracle hints.
+    All knobs live in EnvConfig.
     """
-
     SUPPORTS_CONCURRENT_SESSIONS = False
 
     def __init__(self, difficulty: str = "easy"):
         super().__init__()
-        cfg_map = {
-            "easy":   RealismConfig.easy(),
-            "medium": RealismConfig.medium(),
-            "hard":   RealismConfig.hard(),
-        }
-        self._env = _InternalEnv(
-            use_stub=True,
-            realism=cfg_map.get(difficulty, RealismConfig.easy()),
-        )
-        self._last_obs = None
+        base_cfg = {
+            "easy":   EnvConfig.easy(),
+            "medium": EnvConfig.medium(),
+            "hard":   EnvConfig.hard(),
+        }.get(difficulty, EnvConfig.easy())
+
+        self._curriculum = CurriculumManager(base_cfg.curriculum)
+        self._env = _InternalEnv(config=base_cfg)
+        self._last_obs: Optional[RoboObservation] = None
         self._total_reward = 0.0
         self._step_count = 0
 
-    def reset(self, seed: Optional[int] = None, episode_id: Optional[str] = None, **kwargs) -> RoboObservation:
+    def reset(self, seed=None, episode_id=None, **kwargs) -> RoboObservation:
         import random
         if seed is not None:
             random.seed(seed)
+
+        # Curriculum: update config if level changed
+        sr = self._env.logger.metrics.rolling_success_rate()
+        new_level = self._curriculum.update(sr)
+        if new_level != self._curriculum.current_level:
+            self._env.cfg = self._curriculum.current_config()
+
         internal_obs = self._env.reset()
         self._total_reward = 0.0
         self._step_count = 0
-        obs = _to_robo_obs(internal_obs, done=False, reward=None)
+        obs = self._wrap(internal_obs, done=False, reward=None)
         self._last_obs = obs
         return obs
 
-    def step(self, action: RoboAction, timeout_s: Optional[float] = None, **kwargs) -> RoboObservation:
+    def step(self, action: RoboAction, timeout_s=None, **kwargs) -> RoboObservation:
         result = self._env.step(action.action)
         self._total_reward += result.reward
         self._step_count += 1
-        obs = _to_robo_obs(result.observation, done=result.done, reward=result.reward)
+        obs = self._wrap(result.observation, done=result.done, reward=result.reward,
+                         info=result.info)
         self._last_obs = obs
         return obs
 
@@ -158,16 +142,52 @@ class RoboReplanEnv(Environment[RoboAction, RoboObservation, RoboState]):
             **self._last_obs.model_dump(),
             total_reward=self._total_reward,
             step_count=self._step_count,
+            difficulty=self._curriculum.current_level,
         )
+
+    @property
+    def metrics(self) -> dict:
+        m = self._env.logger.metrics.to_dict()
+        m["current_difficulty"] = self._curriculum.current_level
+        return m
 
     def get_metadata(self):
         from openenv.core.env_server.types import EnvironmentMetadata
         return EnvironmentMetadata(
             name="robo-replan",
             description=(
-                "Tabletop robot planning benchmark: train LLMs to decompose tasks, "
-                "handle blockers, replan after failure, and follow constraints — "
-                "with domain randomization and realistic action noise."
+                "Tabletop robot planning benchmark with curriculum, domain randomization, "
+                "mid-task instruction changes, oracle hints, and full episode logging."
             ),
-            version="0.1.0",
+            version="0.2.0",
         )
+
+    def _wrap(self, obs, done: bool, reward, info: dict = None) -> RoboObservation:
+        info = info or {}
+        visible = [
+            {"name": o.name, "reachable": o.reachable,
+             "blocking": o.blocking, "in_bin": None}
+            for o in obs.visible_objects
+        ]
+        robo = RoboObservation(
+            done=done,
+            reward=reward,
+            instruction=obs.instruction,
+            steps_remaining=obs.steps_remaining,
+            visible_objects=visible,
+            holding=obs.holding,
+            completed_subgoals=obs.completed_subgoals,
+            known_failures=obs.known_failures,
+            active_constraints=obs.active_constraints,
+            action_history=obs.action_history,
+            last_action=obs.last_action,
+            last_result=obs.last_result,
+            valid_actions=obs.valid_actions,
+            goal_progress=obs.goal_progress,
+            goals_remaining=obs.goals_remaining,
+            oracle_hint=obs.oracle_hint,
+            mid_task_changed=info.get("mid_task_changed", False),
+            prompt="",  # fill below
+        )
+        robo.prompt = _build_prompt(robo)
+        return robo
