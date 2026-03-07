@@ -135,7 +135,7 @@ def build_dataset(n_episodes: int = 300):
 #  GRPO training
 # ─────────────────────────────────────────────────────────────────────
 
-def train():
+def train(hf_space_url: str = None):
     try:
         from trl import GRPOTrainer, GRPOConfig
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -149,7 +149,20 @@ def train():
     model = AutoModelForCausalLM.from_pretrained(MODEL)
 
     dataset = build_dataset(n_episodes=300)
-    env = TabletopPlanningEnv(use_stub=True)
+
+    # Use remote HF Space env if URL provided, else local
+    if hf_space_url:
+        print(f"Using remote env: {hf_space_url}")
+        from openenv import AutoEnv
+        remote_env = AutoEnv.from_env(hf_space_url)
+        # Wrap remote env to match local interface
+        class RemoteWrapper:
+            def reset(self): return remote_env.reset()
+            def step(self, action): return remote_env.step({"action": action})
+            def _all_goals_complete(self): return False  # check via done flag
+        env = RemoteWrapper()
+    else:
+        env = TabletopPlanningEnv(use_stub=True)
 
     config = GRPOConfig(
         output_dir="./outputs/grpo",
@@ -226,7 +239,7 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     if args.mode == "train":
-        train()
+        train(hf_space_url=getattr(args, 'hf_space', None))
     elif args.mode == "eval":
         eval_model(args.model)
     elif args.mode == "dataset":
