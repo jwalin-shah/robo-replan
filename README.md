@@ -65,10 +65,27 @@ result = env.step({"action": "CLEAR_BLOCKER"})
 
 ## Training
 
-See `train/grpo_train.py` for the full GRPO training script using TRL.
+See `train/run_training.py` for the GRPO-only training script used in the Northflank run.
 
 ```bash
-pip install trl transformers torch datasets
-python train/grpo_train.py --mode train
-python train/grpo_train.py --mode eval --model ./outputs/grpo_final
+python train/run_training.py
 ```
+
+## Hackathon Compliance
+
+- Open source public repository: this repo.
+- OpenEnv requirement: environment uses `openenv-core==0.2.1`.
+- HF Space deployment: `openenv-community/robo-replan`.
+- Minimal training script: HF TRL script in `train/run_training.py` (GRPO-only).
+- Problem statement alignment: Statement 3.1 (World Modeling, Professional Tasks).
+- Demo requirement: submit a one-minute YouTube video with environment behavior and training results.
+
+### Evidence To Include In Submission
+
+- Baseline metrics from untrained policy (success rate and average reward).
+- Post-training metrics from trained policy on unseen episodes.
+- One failure trajectory before training and one successful replanning trajectory after training.
+- Space links:
+  - `/health`
+  - `/schema`
+  - `/viz`
