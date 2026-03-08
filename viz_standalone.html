@@ -143,6 +143,7 @@
       <div class="controls">
         <button class="primary" onclick="resetEp()">Reset</button>
         <button onclick="togglePlay()" id="play-btn">▶ Run Agent</button>
+        <button onclick="modelStep()" id="model-btn">🤖 Model Step</button>
         <button class="danger" onclick="stopAll()">■ Stop</button>
         <select id="speed">
           <option value="700">Slow</option>
@@ -587,6 +588,7 @@ let episodeCount = 1;
 let successCount = 0;
 let playing  = false;
 let playTimer = null;
+let modelBusy = false;
 
 // Build manual buttons
 const grid = document.getElementById('manual-grid');
@@ -678,6 +680,49 @@ function manualStep(action) {
   const r = env.step(action);
   totalReward += r.reward; stepCount++;
   updateUI(r.observation, r.reward, r.done);
+}
+
+function buildPolicyPrompt(obs) {
+  const objects = obs.visibleObjects
+    .map(o => `${o.name}(${o.reachable ? 'reachable' : 'BLOCKED'})`)
+    .join(', ');
+  const failures = (obs.knownFailures && obs.knownFailures.length) ? obs.knownFailures.join('; ') : 'none';
+  const subgoals = (obs.completedSubgoals && obs.completedSubgoals.length) ? obs.completedSubgoals.join('; ') : 'none yet';
+  return (
+    "You are a robot planning agent on a tabletop. Choose ONE action.\n"
+    + "Actions: SCAN_SCENE | MOVE_TO_RED | MOVE_TO_BLUE | MOVE_TO_GREEN | MOVE_TO_YELLOW | MOVE_TO_PURPLE | PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER\n\n"
+    + `Instruction: ${obs.instruction}\n`
+    + `Scene: ${objects}\n`
+    + `Holding: ${obs.holding || 'nothing'}\n`
+    + `Completed: ${subgoals}\n`
+    + `Failures: ${failures}\n`
+    + `Last: ${obs.lastAction || 'none'} -> ${obs.lastResult || 'n/a'}\n`
+    + `Steps left: ${obs.stepsRemaining}\n\n`
+    + "Output only the action name."
+  );
+}
+
+async function modelStep() {
+  if (modelBusy || !currentObs) return;
+  modelBusy = true;
+  const btn = document.getElementById('model-btn');
+  const prev = btn.textContent;
+  btn.textContent = '…Model';
+  try {
+    const resp = await fetch('/demo/policy_action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: buildPolicyPrompt(currentObs) }),
+    });
+    const data = await resp.json();
+    const action = data.action || 'SCAN_SCENE';
+    manualStep(action);
+  } catch (e) {
+    manualStep('SCAN_SCENE');
+  } finally {
+    modelBusy = false;
+    btn.textContent = prev;
+  }
 }
 
 async function playLoop() {
