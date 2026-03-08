@@ -28,7 +28,7 @@
       display: flex; flex-direction: column; gap: 14px;
     }
     .panel h2 { font-size: 0.7rem; color: #777; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 2px; }
-    .instruction { color: #f0c36d; font-size: 0.88rem; line-height: 1.4; }
+    .instruction { color: #f5ce72; font-size: 0.92rem; line-height: 1.5; }
     .obj-list { display: flex; flex-direction: column; gap: 5px; }
     .obj-row { display: flex; gap: 8px; align-items: center; font-size: 0.8rem; }
     .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
@@ -36,8 +36,8 @@
     .tag.blocked { background: #3a1a1a; color: #e06060; }
     .tag.hidden  { background: #2a2a1a; color: #b8a060; }
     .tag.held    { background: #1a3a1a; color: #60e090; }
-    .reasoning-box { background: #1a1a2e; border-left: 3px solid #4a6fa5; border-radius: 4px; padding: 8px 10px; font-size: 0.75rem; color: #8ab4d4; line-height: 1.5; font-style: italic; margin-bottom: 6px; white-space: pre-wrap; word-break: break-word; }
-    .action-box    { background: #1a2e1a; border-left: 3px solid #4a8a4a; border-radius: 4px; padding: 6px 10px; font-size: 0.8rem; color: #7ed87e; font-family: monospace; font-weight: bold; letter-spacing: 0.05em; }
+    .reasoning-box { background: #131320; border-left: 5px solid #5a8fd5; border-radius: 4px; padding: 10px 12px; font-size: 0.82rem; color: #a8ccee; line-height: 1.6; font-style: italic; margin-bottom: 8px; white-space: pre-wrap; word-break: break-word; }
+    .action-box    { background: #0e2a0e; border-left: 5px solid #3a9a3a; border-radius: 4px; padding: 8px 12px; font-size: 0.92rem; color: #80e880; font-family: monospace; font-weight: bold; letter-spacing: 0.08em; }
     .log { display: flex; flex-direction: column; gap: 3px; max-height: 180px; overflow-y: auto; }
     .log-row { font-size: 0.73rem; display: flex; gap: 8px; }
     .log-row .sn  { color: #555; width: 26px; flex-shrink: 0; }
@@ -46,8 +46,8 @@
     .log-row .res.fail { color: #e06060; }
     .log-row .rew { color: #f0c36d; }
     .stats { display: flex; gap: 16px; flex-wrap: wrap; }
-    .stat .label { font-size: 0.62rem; color: #666; text-transform: uppercase; }
-    .stat .value { font-size: 1.1rem; color: #c0d8f8; }
+    .stat .label { font-size: 0.65rem; color: #888; text-transform: uppercase; letter-spacing: 0.06em; }
+    .stat .value { font-size: 1.4rem; color: #d4eaff; font-weight: bold; }
     .controls { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 4px; }
     .diff-controls { display: flex; gap: 6px; margin-top: 8px; }
     .diff-btn.active { background: #2a5a8a; border-color: #4a8ad0; color: #cfe6ff; }
@@ -73,32 +73,32 @@
       padding: 7px 14px; font-size: 0.88rem; color: #60c0ff; text-align: center;
     }
     .mid-task-banner {
-      background: #2a1a0a; border: 2px solid #e07030; border-radius: 6px;
-      padding: 8px 14px; font-size: 0.82rem; color: #f09050; text-align: center;
-      animation: pulse-border 1s ease-in-out 3;
+      background: #2a1505; border: 2px solid #f07828; border-radius: 6px;
+      padding: 10px 16px; font-size: 0.92rem; color: #ffb060; text-align: center;
+      font-weight: bold; letter-spacing: 0.03em;
+      animation: pulse-border 1.2s ease-in-out infinite;
     }
     @keyframes pulse-border {
-      0%,100% { border-color: #e07030; box-shadow: none; }
-      50% { border-color: #ffb060; box-shadow: 0 0 12px #e0703088; }
+      0%,100% { border-color: #f07828; box-shadow: none; }
+      50% { border-color: #ffd080; box-shadow: 0 0 18px #f0782888; }
     }
-    .rbar-bg { background: #222; border-radius: 4px; height: 7px; overflow: hidden; margin-top: 4px; }
+    .rbar-bg { background: #222; border-radius: 4px; height: 10px; overflow: hidden; margin-top: 6px; }
     .rbar    { height: 100%; border-radius: 4px; transition: width 0.3s, background 0.3s; }
     select { background:#252535; color:#ccc; border:1px solid #444; border-radius:4px; padding:4px; font-family:inherit; }
     .manual-grid { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
   </style>
 </head>
 <body>
-<h1>Tabletop Planning Environment — Standalone Visualization</h1>
+<h1>RoboReplan — Tabletop Planning &amp; Replanning Environment</h1>
 
 <div class="layout">
   <div style="display:flex;flex-direction:column;gap:10px;">
     <div class="canvas-wrap">
-      <div style="font-size:0.65rem;color:#555;margin-bottom:4px;">TOP-DOWN VIEW &nbsp;•&nbsp; ⊕ gripper &nbsp;•&nbsp; × blocked (unreachable)</div>
-      <div style="font-size:0.6rem;color:#666;margin-bottom:4px;">Blockers (on top) are reachable — use CLEAR_BLOCKER first, then MOVE_TO_&lt;color&gt; → PICK.</div>
+      <div style="font-size:0.7rem;color:#888;margin-bottom:6px;letter-spacing:0.05em;">TOP-DOWN VIEW &nbsp;•&nbsp; <span style="color:#f0c36d">⊕</span> gripper &nbsp;•&nbsp; <span style="color:#e06060">×</span> blocked</div>
       <canvas id="canvas" width="400" height="340"></canvas>
     </div>
     <div class="canvas-wrap">
-      <div style="font-size:0.65rem;color:#555;margin-bottom:6px;">SIDE VIEW &nbsp;•&nbsp; shows stacking / blocking relationships</div>
+      <div style="font-size:0.7rem;color:#888;margin-bottom:6px;letter-spacing:0.05em;">SIDE VIEW &nbsp;•&nbsp; stacking &amp; blocking</div>
       <canvas id="canvas-side" width="400" height="140"></canvas>
     </div>
   </div>
@@ -544,11 +544,11 @@ function drawScene(obs) {
   ctx.clearRect(0,0,W,H);
 
   // Table bg
-  ctx.fillStyle = '#1a1a10';
+  ctx.fillStyle = '#13131e';
   ctx.fillRect(0,0,W,H);
 
   // Grid
-  ctx.strokeStyle = '#252515'; ctx.lineWidth = 1;
+  ctx.strokeStyle = '#2a2a3a'; ctx.lineWidth = 1;
   for (let i = -6; i <= 6; i++) {
     let [x1,y1] = w2c(i*0.07,-0.42), [x2,y2] = w2c(i*0.07,0.42);
     ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
@@ -644,7 +644,7 @@ const SW = canvasSide.width, SH = canvasSide.height;
 function drawSideView(obs) {
   if (!obs) return;
   ctxS.clearRect(0,0,SW,SH);
-  ctxS.fillStyle = '#1a1a10'; ctxS.fillRect(0,0,SW,SH);
+  ctxS.fillStyle = '#13131e'; ctxS.fillRect(0,0,SW,SH);
 
   // Table surface
   const tableY = SH - 28;
@@ -955,14 +955,11 @@ function updateUI(obs, reward, done) {
   const loopRisk = (sorted.length && (sorted[0][1] / Math.max(1, recentActions.length)) > 0.7)
     ? 'HIGH'
     : 'LOW';
+  const loopColor = loopRisk === 'HIGH' ? 'color:#e06060' : 'color:#60e090';
   document.getElementById('diag').innerHTML = `
     <div class="item con">Top recent action: ${top}</div>
     <div class="item con">Avg recent reward: ${avgRecentReward}</div>
-    <div class="item con">Mode: ${obs.navMode ? 'Navigation' : 'Top-Down'}</div>
-    <div class="item con">Next target cell: ${obs.nextTargetCell || 'n/a'}</div>
-    <div class="item con">Oracle counterfactual: ${(lastStepInfo && lastStepInfo.oracle_action) || obs.oracleHint || 'n/a'}</div>
-    <div class="item con">Deadlines: ${obs.deadlineStatus ? JSON.stringify(obs.deadlineStatus) : 'none'}</div>
-    <div class="item con">Loop risk: ${loopRisk}</div>
+    <div class="item" style="${loopColor}">Loop risk: ${loopRisk}</div>
   `;
   const rawEl = document.getElementById('raw-model');
   const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
