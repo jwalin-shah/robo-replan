@@ -168,7 +168,15 @@ def demo_policy_action(req: PolicyActionRequest):
     """
     try:
         pipe = _get_policy_pipe()
-        out = pipe(req.prompt, return_full_text=False, max_new_tokens=20, do_sample=False)[0]["generated_text"]
+        out = pipe(
+            req.prompt,
+            return_full_text=False,
+            max_new_tokens=12,
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.9,
+            repetition_penalty=1.05,
+        )[0]["generated_text"]
         action = _extract_action(out)
         valid = _parse_valid_actions_from_prompt(req.prompt)
         if valid and action not in valid:
