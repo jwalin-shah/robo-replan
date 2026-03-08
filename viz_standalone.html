@@ -944,6 +944,23 @@ function buildPolicyPrompt(obs) {
   );
 }
 
+function chooseNonScanFallback(validActions) {
+  const valid = new Set(validActions || []);
+  const priority = [
+    'PLACE_BIN_A','PLACE_BIN_B',
+    'PICK',
+    'CLEAR_BLOCKER',
+    'MOVE_TO_RED','MOVE_TO_BLUE','MOVE_TO_GREEN','MOVE_TO_YELLOW','MOVE_TO_PURPLE',
+    'MOVE_NORTH','MOVE_SOUTH','MOVE_EAST','MOVE_WEST',
+    'ROTATE_LEFT','ROTATE_RIGHT',
+    'SCAN_SCENE',
+  ];
+  for (const a of priority) {
+    if (valid.has(a)) return a;
+  }
+  return 'SCAN_SCENE';
+}
+
 async function modelStep() {
   if (modelBusy || !currentObs) return;
   modelBusy = true;
@@ -957,7 +974,11 @@ async function modelStep() {
       body: JSON.stringify({ prompt: buildPolicyPrompt(currentObs) }),
     });
     const data = await resp.json();
-    const action = data.action || 'SCAN_SCENE';
+    let action = data.action || 'SCAN_SCENE';
+    const valid = currentObs.validActions || [];
+    if (action === 'SCAN_SCENE' && valid.some(v => v !== 'SCAN_SCENE')) {
+      action = chooseNonScanFallback(valid.filter(v => v !== 'SCAN_SCENE'));
+    }
     await manualStepAsync(action);
   } catch (e) {
     await manualStepAsync('SCAN_SCENE');
