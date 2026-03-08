@@ -256,7 +256,8 @@ class SimWrapper:
 
         elif action.startswith("MOVE_TO_"):
             color = action[len("MOVE_TO_"):].lower()
-            name = color + "_block"
+            # Try "<color>_block" first (default pack), then bare name (professional packs)
+            name = color + "_block" if (color + "_block") in s.objects else color
             if name not in s.objects:
                 return "FAILED_INVALID"
             obj = s.objects[name]
@@ -293,6 +294,10 @@ class SimWrapper:
                 return "FAILED_EMPTY"
             bin_name = "A" if action == "PLACE_BIN_A" else "B"
             obj = s.objects[s.holding]
+            # If this object was blocking something, reveal that target now.
+            if obj.blocking and obj.blocking in s.objects:
+                s.objects[obj.blocking].reachable = True
+                obj.blocking = None
             obj.in_bin = bin_name
             obj.is_held = False
             obj.reachable = False

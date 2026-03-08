@@ -31,6 +31,7 @@ class RewardWeights:
     timeout_failure: float = -10.0
     missed_deadline: float = -5.0
     useless_action: float = -0.4
+    fragile_pick_penalty: float = -3.0  # picking fragile object without scanning first
 
 
 @dataclass
@@ -55,9 +56,10 @@ class TaskConfig:
     max_steps: int = 20
     force_blocked_prob: float = 0.6      # how often to guarantee a blocker
 
-    # Mid-task instruction change
-    mid_task_change_prob: float = 0.0    # prob per episode of a rule changing mid-way
-    mid_task_change_step: int = 8        # at which step the change happens
+    # Mid-task instruction change — can fire at multiple steps per episode
+    mid_task_change_prob: float = 0.0    # prob per candidate step of a change occurring
+    mid_task_change_step: int = 8        # kept for backward compat; use mid_task_change_steps
+    mid_task_change_steps: list = field(default_factory=lambda: [8])  # all candidate steps
     navigation_mode: bool = False
     lock_wrong_bin_steps: int = 3
     enable_deadlines: bool = False
@@ -125,18 +127,49 @@ class EnvConfig:
     @classmethod
     def easy(cls):
         return cls(realism=RealismConfig.easy(),
-                   task=TaskConfig(n_blockers_max=1, mid_task_change_prob=0.0))
+                   task=TaskConfig(n_blockers_max=1, mid_task_change_prob=0.0,
+                                   require_scan_for_traits=False))  # no penalty in easy
 
     @classmethod
     def medium(cls):
+        # Enforce scan-before-pick: agent must learn information gathering
         return cls(realism=RealismConfig.medium(),
-                   task=TaskConfig(n_blockers_max=2, mid_task_change_prob=0.15,
-                                   enable_deadlines=True))
+                   task=TaskConfig(n_blockers_max=2, mid_task_change_prob=0.20,
+                                   mid_task_change_steps=[8],
+                                   enable_deadlines=True,
+                                   require_scan_for_traits=True))
 
     @classmethod
     def hard(cls):
+        # Multiple instruction changes + scan enforcement + navigation
         return cls(realism=RealismConfig.hard(),
                    task=TaskConfig(n_objects_max=5, n_blockers_max=3,
-                                   n_targets_max=2, mid_task_change_prob=0.30,
+                                   n_targets_max=2, mid_task_change_prob=0.35,
+                                   mid_task_change_steps=[6, 12],
                                    navigation_mode=True, enable_deadlines=True,
+                                   require_scan_for_traits=True,
                                    adversarial_sampling_prob=0.25))
+
+    @classmethod
+    def long_horizon(cls, scenario_pack: str = "default"):
+        """
+        Extended planning episodes: 3–4 targets, 6–8 objects, chained blockers,
+        up to 3 mid-task instruction changes, deadlines, scan-enforced traits.
+        Max 50 steps. Tests true multi-step adaptive planning.
+        Use scenario_pack="warehouse"|"pharmacy"|"lab" for professional task framing.
+        """
+        return cls(realism=RealismConfig.hard(),
+                   task=TaskConfig(n_objects_min=4, n_objects_max=8,
+                                   n_targets_min=3, n_targets_max=4,
+                                   n_blockers_min=1, n_blockers_max=4,
+                                   max_steps=50,
+                                   force_blocked_prob=0.9,
+                                   mid_task_change_prob=0.40,
+                                   mid_task_change_steps=[8, 18, 30],
+                                   navigation_mode=False,
+                                   require_scan_for_traits=True,
+                                   enable_deadlines=True,
+                                   deadline_min_step=8,
+                                   deadline_max_step=20,
+                                   adversarial_sampling_prob=0.30,
+                                   scenario_pack=scenario_pack))

@@ -79,7 +79,7 @@ FAST_MODE = os.environ.get("FAST_MODE", "0").lower() in ("1", "true", "yes")
 GRPO_BATCH_SIZE = int(os.environ.get("GRPO_BATCH_SIZE", "4"))
 GRPO_GRAD_ACCUM = int(os.environ.get("GRPO_GRAD_ACCUM", "4"))
 GRPO_NUM_GENERATIONS = int(os.environ.get("GRPO_NUM_GENERATIONS", "4"))
-GRPO_MAX_COMPLETION_LENGTH = int(os.environ.get("GRPO_MAX_COMPLETION_LENGTH", "12"))
+GRPO_MAX_COMPLETION_LENGTH = int(os.environ.get("GRPO_MAX_COMPLETION_LENGTH", "128"))
 GRPO_TEMPERATURE = float(os.environ.get("GRPO_TEMPERATURE", "1.1"))
 GRPO_TOP_P = float(os.environ.get("GRPO_TOP_P", "0.98"))
 ENABLE_SFT_WARMSTART = os.environ.get("ENABLE_SFT_WARMSTART", "0").lower() in ("1", "true", "yes")
@@ -115,12 +115,13 @@ if FAST_MODE:
     if "GRPO_NUM_GENERATIONS" not in os.environ:
         GRPO_NUM_GENERATIONS = 2
     if "GRPO_MAX_COMPLETION_LENGTH" not in os.environ:
-        GRPO_MAX_COMPLETION_LENGTH = 4
+        GRPO_MAX_COMPLETION_LENGTH = 48
 
 CFG_BY_NAME = {
     "easy": EnvConfig.easy,
     "medium": EnvConfig.medium,
     "hard": EnvConfig.hard,
+    "long_horizon": EnvConfig.long_horizon,
 }
 if TRAIN_DIFFICULTY not in CFG_BY_NAME:
     raise ValueError(f"Unsupported TRAIN_DIFFICULTY={TRAIN_DIFFICULTY}; use one of {list(CFG_BY_NAME)}")
@@ -143,8 +144,11 @@ SYSTEM = (
     "You are a robot planning agent on a tabletop. Complete manipulation tasks "
     "by choosing ONE action per step.\n\n"
     f"Actions: {ACTION_LIST_STR}\n\n"
-    "Output ONLY one action name from the list. No explanation, no tags, no extra text.\n"
+    "Before each action, write a short plan inside <think>...</think>: "
+    "list remaining steps needed, then state what you are doing now and why.\n"
     "Example:\n"
+    "<think>Plan: CLEAR_BLOCKER → MOVE_TO_RED → PICK → PLACE_BIN_A. "
+    "Red is blocked so I clear first. Doing: CLEAR_BLOCKER.</think>\n"
     "CLEAR_BLOCKER"
 )
 
@@ -159,12 +163,20 @@ def obs_to_user_msg(obs):
     failures = '; '.join(obs.known_failures) or 'none'
     subgoals = '; '.join(obs.completed_subgoals) or 'none yet'
     history  = ' -> '.join(obs.action_history[-5:]) or 'none'
+    nav_line = ""
+    if getattr(obs, 'nav_mode', False):
+        nav_line = (
+            f"Navigation: gripper={getattr(obs, 'gripper_cell', '?')} "
+            f"facing={getattr(obs, 'gripper_facing', '?')} "
+            f"next_target={getattr(obs, 'next_target_cell', '?')}\n"
+        )
     return (
         f"Instruction: {obs.instruction}\n"
         f"Scene: {objects}\n"
         f"Holding: {obs.holding or 'nothing'}\n"
         f"Progress: {obs.goal_progress:.0%}  Remaining: {obs.goals_remaining}\n"
-        f"Completed: {subgoals}\n"
+        + nav_line
+        + f"Completed: {subgoals}\n"
         f"Failures: {failures}\n"
         f"History: {history}\n"
         f"Last: {obs.last_action or 'none'} -> {obs.last_result or 'n/a'}\n"
@@ -925,7 +937,7 @@ def trained_policy(obs):
     with torch.no_grad():
         output_ids = eval_model.generate(
             **encoded,
-            max_new_tokens=16,
+            max_new_tokens=256,
             do_sample=False,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
@@ -941,3 +953,57 @@ print()
 print("IMPROVEMENT:")
 print(f"  Success: {baseline['success_rate']:.0%} -> {after['success_rate']:.0%}")
 print(f"  Reward:  {baseline['avg_reward']:.1f} -> {after['avg_reward']:.1f}")
+
+# ── Learning curve plot ────────────────────────────────────────────────
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    calls, means, stds = [], [], []
+    try:
+        with open(METRICS_JSONL, encoding="utf-8") as f:
+            for line in f:
+                row = json.loads(line)
+                calls.append(row["call"])
+                means.append(row["batch_mean"])
+                stds.append(row.get("batch_std", 0))
+    except FileNotFoundError:
+        pass
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    fig.suptitle("RoboReplan GRPO Training — Qwen2.5-1.5B-Instruct", fontsize=13, fontweight="bold")
+
+    # Left: reward curve during training
+    ax = axes[0]
+    if calls:
+        lo = [m - s for m, s in zip(means, stds)]
+        hi = [m + s for m, s in zip(means, stds)]
+        ax.fill_between(calls, lo, hi, alpha=0.2, color="#4a8adc")
+        ax.plot(calls, means, color="#4a8adc", linewidth=2)
+        ax.axhline(0, color="#555", linewidth=0.8, linestyle="--")
+    ax.set_xlabel("GRPO reward-function calls")
+    ax.set_ylabel("Mean batch reward")
+    ax.set_title("Reward during GRPO training")
+    ax.grid(True, alpha=0.3)
+
+    # Right: before / after success rate + reward
+    ax2 = axes[1]
+    labels = ["Before\n(random)", "After\n(GRPO)"]
+    sr = [baseline["success_rate"] * 100, after["success_rate"] * 100]
+    bars = ax2.bar(labels, sr, color=["#8a3a3a", "#3a8a3a"], width=0.5, zorder=3)
+    for bar, v in zip(bars, sr):
+        ax2.text(bar.get_x() + bar.get_width() / 2, v + 1, f"{v:.0f}%",
+                 ha="center", va="bottom", fontweight="bold", fontsize=11)
+    ax2.set_ylim(0, 110)
+    ax2.set_ylabel("Success rate (%)")
+    ax2.set_title(f"Before vs After  (difficulty={TRAIN_DIFFICULTY})")
+    ax2.grid(True, alpha=0.3, axis="y", zorder=0)
+
+    plt.tight_layout()
+    curve_path = os.path.join(os.path.dirname(METRICS_JSONL), "training_curve.png")
+    plt.savefig(curve_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"[plot] Saved learning curve → {curve_path}")
+except Exception as _plot_exc:
+    print(f"[plot] skipped (matplotlib unavailable or error: {_plot_exc})")

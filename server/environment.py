@@ -189,13 +189,15 @@ class TabletopPlanningEnv:
         if self._done:
             raise RuntimeError("Episode is done. Call reset() first.")
 
-        # Inject mid-task instruction change if configured
-        if (not self._mid_task_changed
-                and self.cfg.task.mid_task_change_prob > 0
-                and self._steps == self.cfg.task.mid_task_change_step
+        # Inject mid-task instruction changes — can fire at multiple steps
+        change_steps = getattr(self.cfg.task, 'mid_task_change_steps', [self.cfg.task.mid_task_change_step])
+        if (self.cfg.task.mid_task_change_prob > 0
+                and self._steps in change_steps
+                and self._steps not in self._changes_applied
                 and random.random() < self.cfg.task.mid_task_change_prob
                 and not self._done):
             self._apply_mid_task_change()
+            self._changes_applied.add(self._steps)
 
         pre_holding = self.sim.get_state().holding
         valid_now = self._valid_actions()
@@ -215,8 +217,27 @@ class TabletopPlanningEnv:
                 state.objects[state.holding].is_held = False
                 state.holding = None
 
+        # SCAN reveals hidden traits of all currently reachable objects
         if action == "SCAN_SCENE" and result == "SUCCESS":
             self._scanned = True
+            hidden = getattr(self._scenario_cfg, 'hidden_traits', {}) or {}
+            state = self.sim.get_state()
+            for obj_name, trait in hidden.items():
+                obj = state.objects.get(obj_name)
+                if obj and (obj.reachable or obj.in_bin is not None or obj.is_held):
+                    self._revealed_traits[obj_name] = trait
+
+        # FAILED_FRAGILE: picking an unscanned fragile object damages it
+        if (result == "SUCCESS" and action == "PICK"
+                and getattr(self.cfg.task, 'require_scan_for_traits', False)):
+            state = self.sim.get_state()
+            picked = state.holding
+            hidden = getattr(self._scenario_cfg, 'hidden_traits', {}) or {}
+            if picked and hidden.get(picked) == "fragile" and picked not in self._revealed_traits:
+                # Object is fragile but agent never scanned — it breaks
+                state.objects[picked].is_held = False
+                state.holding = None
+                result = "FAILED_FRAGILE"
 
         self._apply_world_drift()
         self._action_history.append(action)
@@ -266,7 +287,7 @@ class TabletopPlanningEnv:
                 "deadline_status": self._deadline_status(),
                 "invalid_reason": invalid_reason,
                 "goal_progress": self._goal_progress(),
-                "mid_task_changed": self._mid_task_changed and self._steps == self.cfg.task.mid_task_change_step + 1,
+                "mid_task_changed": (self._steps - 1) in self._changes_applied,
                 "cumulative_reward": self._cumulative_reward,
             },
         )
@@ -295,6 +316,7 @@ class TabletopPlanningEnv:
         self._done = False
         self._scanned = False
         self._mid_task_changed = False
+        self._changes_applied: set[int] = set()   # which change-steps have fired
         self._cumulative_reward = 0.0
         self._action_history = []
         self._last_action = None
@@ -305,6 +327,8 @@ class TabletopPlanningEnv:
                                                 if scenario_cfg.constraint else [])
         self._instruction = scenario_cfg.instruction
         self._required_placements: dict[str, str] = dict(scenario_cfg.targets)
+        # Per-object trait reveal: populated by SCAN_SCENE, enforced in PICK
+        self._revealed_traits: dict[str, str] = {}
 
         self._episode_id += 1
         self.logger.begin_episode(
@@ -320,9 +344,12 @@ class TabletopPlanningEnv:
 
     def _reasoning_bonus(self, reasoning: str, action: str, result: str) -> float:
         """
-        Small bonus for reasoning that mentions relevant objects/constraints.
-        Encourages the model to develop coherent internal planning language.
-        Not large enough to game — just nudges toward explainable behavior.
+        Bonus for reasoning that mentions relevant objects, constraints, and plans.
+
+        The cap scales with reasoning length — longer, more detailed chain-of-thought
+        can earn proportionally more reward (up to a hard ceiling of 1.5).
+        This means frontier models that reason verbosely about their plan are rewarded
+        more than models that output terse one-word justifications.
         """
         if not reasoning or len(reasoning) < 10:
             return 0.0
@@ -359,7 +386,15 @@ class TabletopPlanningEnv:
                 bonus += 0.1
                 break
 
-        return min(bonus, 0.5)  # cap at 0.5 so it never dominates task reward
+        # Bonus for explicit multi-step plan in reasoning ("plan:" or "→" sequence)
+        if "plan:" in r or (" → " in reasoning):
+            bonus += 0.15
+
+        # Token-length scaling: longer reasoning unlocks a higher reward cap.
+        # Every 50 chars of reasoning raises the cap by 0.1, up to max 1.5.
+        # This rewards richer chain-of-thought without rewarding padding.
+        length_scale = min(1.5, 0.5 + 0.1 * (len(reasoning) // 50))
+        return min(bonus, length_scale)
 
     def _compute_reward(self, action: str, result: str, pre_holding: Optional[str] = None) -> float:
         w = self.cfg.reward
@@ -373,7 +408,12 @@ class TabletopPlanningEnv:
 
         if result not in ("SUCCESS", "PARTIAL_CLEAR"):
             failure_key = f"{action}:{result}"
-            r += w.repeated_failure if failure_key in self._known_failures else w.first_failure
+            if result == "FAILED_FRAGILE":
+                # Larger specific penalty — agent should have scanned first
+                r += w.fragile_pick_penalty
+                r += w.repeated_failure if failure_key in self._known_failures else w.first_failure
+            else:
+                r += w.repeated_failure if failure_key in self._known_failures else w.first_failure
             return r
 
         if action == "CLEAR_BLOCKER":
@@ -581,6 +621,16 @@ class TabletopPlanningEnv:
                     return obj.name
             return None
 
+        # If scan is required and next pick target is fragile+unscanned → scan first
+        if getattr(self.cfg.task, 'require_scan_for_traits', False):
+            hidden = getattr(self._scenario_cfg, 'hidden_traits', {}) or {}
+            for obj_name in self._required_placements:
+                obj = state.objects.get(obj_name)
+                if (obj and obj.reachable and obj.in_bin is None
+                        and hidden.get(obj_name) == "fragile"
+                        and obj_name not in self._revealed_traits):
+                    return "SCAN_SCENE"
+
         # Just moved to something → pick it
         if last_action and last_action.startswith("MOVE_TO") and last_result == "SUCCESS":
             return "PICK"
@@ -679,6 +729,8 @@ class TabletopPlanningEnv:
         extra["deadline_status"] = self._deadline_status()
         extra["object_deadlines"] = getattr(self._scenario_cfg, "deadlines", {}) or {}
         extra["observability_map"] = self._observability_map()
+        # Show what traits have been revealed so far (empty until agent scans)
+        extra["discovered_traits"] = dict(self._revealed_traits)
 
         return Observation(
             instruction=self._instruction,

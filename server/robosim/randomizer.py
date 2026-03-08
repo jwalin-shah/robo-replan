@@ -149,8 +149,10 @@ def _build_instruction(target_bins: dict[str, str], constraint: Optional[str],
                        hidden_traits: dict[str, str], deadlines: dict[str, int]) -> str:
     parts = []
     for obj, bin_ in target_bins.items():
-        color = OBJECT_COLORS.get(obj, obj.replace("_block", ""))
-        parts.append(f"the {color} block in bin {bin_}")
+        display = OBJECT_COLORS.get(obj, obj.replace("_block", ""))
+        # Use bare display name for non-block objects (professional packs)
+        label = f"the {display} block" if obj.endswith("_block") else f"the {display}"
+        parts.append(f"{label} in bin {bin_}")
 
     if len(parts) == 1:
         base = f"Place {parts[0]}."
@@ -166,16 +168,31 @@ def _build_instruction(target_bins: dict[str, str], constraint: Optional[str],
 
     if deadlines:
         for obj, step in deadlines.items():
-            color = OBJECT_COLORS.get(obj, obj.replace("_block", ""))
-            base += f" Place the {color} block by step {step}."
+            display = OBJECT_COLORS.get(obj, obj.replace("_block", ""))
+            label = f"the {display} block" if obj.endswith("_block") else f"the {display}"
+            base += f" Place {label} by step {step}."
 
     if hidden_traits:
         base += " Some object traits are hidden until you inspect the scene."
 
     return base
 SCENARIO_PACKS = {
-    "default": OBJECT_NAMES,
-    "warehouse": ["red_block", "blue_block", "green_block", "yellow_block", "purple_block"],
-    "kitchen": ["yellow_block", "green_block", "red_block", "purple_block", "blue_block"],
-    "assembly": ["blue_block", "red_block", "green_block", "yellow_block", "purple_block"],
+    "default":   OBJECT_NAMES,
+    # Professional task skins — same mechanics, domain-appropriate names
+    "warehouse": ["fragile_package", "heavy_pallet", "urgent_parcel", "standard_box", "hazmat_drum"],
+    "pharmacy":  ["morphine_vial", "saline_bag", "insulin_pen", "blood_sample", "contrast_agent"],
+    "lab":       ["reagent_alpha", "catalyst_beta", "sample_gamma", "solvent_delta", "enzyme_epsilon"],
 }
+
+# Color/display name for each object in each pack
+OBJECT_COLORS.update({
+    "fragile_package": "fragile package", "heavy_pallet": "heavy pallet",
+    "urgent_parcel": "urgent parcel", "standard_box": "standard box",
+    "hazmat_drum": "hazmat drum",
+    "morphine_vial": "morphine vial", "saline_bag": "saline bag",
+    "insulin_pen": "insulin pen", "blood_sample": "blood sample",
+    "contrast_agent": "contrast agent",
+    "reagent_alpha": "reagent-α", "catalyst_beta": "catalyst-β",
+    "sample_gamma": "sample-γ", "solvent_delta": "solvent-δ",
+    "enzyme_epsilon": "enzyme-ε",
+})
