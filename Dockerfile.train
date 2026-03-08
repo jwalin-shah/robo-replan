@@ -11,12 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python deps (training stack)
+# Install Python deps (training stack). PyTorch 2.6+ required for TRL (FSDPModule in torch.distributed.fsdp)
 COPY pyproject.toml .
 RUN pip3 install --no-cache-dir \
-    torch --index-url https://download.pytorch.org/whl/cu121 \
+    "torch>=2.6.0" --index-url https://download.pytorch.org/whl/cu121 \
     && pip3 install --no-cache-dir \
-    transformers accelerate datasets trl \
+    "transformers>=4.40" "accelerate>=0.30" "datasets" "trl>=0.15" \
     pydantic numpy "openenv-core==0.2.1" \
     sentencepiece safetensors
 
