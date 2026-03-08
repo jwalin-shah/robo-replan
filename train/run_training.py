@@ -426,7 +426,7 @@ if ENABLE_SFT_WARMSTART:
         save_strategy='no',
         report_to='none',
         dataset_text_field='text',
-        max_seq_length=512,
+        max_length=512,
         bf16=True,
     )
     sft_trainer = SFTTrainer(
