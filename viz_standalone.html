@@ -135,6 +135,10 @@
       <h2>Model Diagnostics</h2>
       <div class="list-items" id="diag"></div>
     </div>
+    <div>
+      <h2>Raw Model Output</h2>
+      <div class="list-items" id="raw-model"><div class="none">none</div></div>
+    </div>
 
     <div id="done-sec" style="display:none">
       <div class="done-banner" id="done-txt"></div>
@@ -690,6 +694,7 @@ let successCount = 0;
 let playing  = false;
 let playTimer = null;
 let modelBusy = false;
+let lastModelRaw = '';
 let recentActions = [];
 let recentRewards = [];
 let backendHealthy = true;
@@ -850,6 +855,10 @@ function updateUI(obs, reward, done) {
     <div class="item con">Next target cell: ${obs.nextTargetCell || 'n/a'}</div>
     <div class="item con">Loop risk: ${loopRisk}</div>
   `;
+  const rawEl = document.getElementById('raw-model');
+  rawEl.innerHTML = lastModelRaw
+    ? `<div class="item con">${lastModelRaw.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`
+    : '<div class="none">none</div>';
 
   renderManualButtons(obs.validActions);
 
@@ -978,9 +987,11 @@ async function modelStep() {
       body: JSON.stringify({ prompt: buildPolicyPrompt(currentObs) }),
     });
     const data = await resp.json();
+    lastModelRaw = data.raw_output || '';
     let action = data.action || 'SCAN_SCENE';
     await manualStepAsync(action);
   } catch (e) {
+    lastModelRaw = `ERROR: ${String(e)}`;
     await manualStepAsync('SCAN_SCENE');
   } finally {
     modelBusy = false;
