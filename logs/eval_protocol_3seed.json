@@ -17,14 +17,14 @@
       "seed": 1337,
       "episodes": 30,
       "success_rate": 1.0,
-      "avg_return": 20.70333333333333
+      "avg_return": 20.026666666666664
     },
     {
       "level": "hard",
       "seed": 1337,
       "episodes": 30,
-      "success_rate": 0.16666666666666666,
-      "avg_return": -26.428
+      "success_rate": 0.9333333333333333,
+      "avg_return": 14.587333333333333
     },
     {
       "level": "easy",
@@ -37,15 +37,15 @@
       "level": "medium",
       "seed": 2024,
       "episodes": 30,
-      "success_rate": 0.9666666666666667,
-      "avg_return": 19.714999999999996
+      "success_rate": 0.9333333333333333,
+      "avg_return": 17.626666666666665
     },
     {
       "level": "hard",
       "seed": 2024,
       "episodes": 30,
-      "success_rate": 0.13333333333333333,
-      "avg_return": -26.154999999999998
+      "success_rate": 0.8666666666666667,
+      "avg_return": 11.892
     },
     {
       "level": "easy",
@@ -59,14 +59,14 @@
       "seed": 4242,
       "episodes": 30,
       "success_rate": 1.0,
-      "avg_return": 20.386666666666663
+      "avg_return": 19.606666666666666
     },
     {
       "level": "hard",
       "seed": 4242,
       "episodes": 30,
-      "success_rate": 0.2,
-      "avg_return": -23.352666666666664
+      "success_rate": 0.8,
+      "avg_return": 10.660333333333334
     }
   ],
   "summary": {
@@ -75,12 +75,12 @@
       "return_mean": 20.887777777777774
     },
     "medium": {
-      "success_mean": 0.9888888888888889,
-      "return_mean": 20.26833333333333
+      "success_mean": 0.9777777777777779,
+      "return_mean": 19.086666666666662
     },
     "hard": {
-      "success_mean": 0.16666666666666666,
-      "return_mean": -25.311888888888888
+      "success_mean": 0.8666666666666667,
+      "return_mean": 12.37988888888889
     }
   }
 }

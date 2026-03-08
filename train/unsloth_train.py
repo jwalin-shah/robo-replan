@@ -240,7 +240,10 @@ def _to_text(x):
         return ' '.join(_to_text(v) for v in x)
     return str(x)
 
-def extract_action(text: str):
+def extract_action(text):
+    """Extract a single action token from model output. Accepts str or list (batch)."""
+    if not isinstance(text, str):
+        text = _to_text(text) if isinstance(text, (dict, list, tuple)) else str(text)
     clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip().upper()
     clean = re.sub(r'[^A-Z_ ]+', ' ', clean)
     clean = re.sub(r'\s+', ' ', clean).strip().split()[0] if clean.strip() else ''

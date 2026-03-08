@@ -162,12 +162,12 @@ class TabletopPlanningEnv:
         return lines
 
     def _nav_step_toward(self, target: tuple[int, int]) -> str:
-        """Navigate one step toward target. Stop one cell away so PICK can reach."""
+        """Navigate one step toward target cell (navigates all the way onto the cell)."""
         gx, gy = self._gripper_cell()
         tx, ty = target
         dx, dy = tx - gx, ty - gy
-        # Already adjacent (Manhattan ≤ 1) — no need to move closer
-        if abs(dx) + abs(dy) <= 1:
+        # Already at target cell — nothing to do
+        if dx == 0 and dy == 0:
             return "SCAN_SCENE"
         # Move along the longer axis first
         if abs(dx) >= abs(dy):
@@ -664,11 +664,14 @@ class TabletopPlanningEnv:
                 continue
             if obj.reachable:
                 if self._nav_enabled():
-                    if self._is_adjacent_to(obj_name):
+                    obj_cell = self._object_cell(obj_name)
+                    gripper_cell = self._gripper_cell()
+                    # Navigate all the way to the object's cell so PICK grabs
+                    # the right object (not a closer distractor).
+                    if obj_cell is not None and gripper_cell == obj_cell:
                         return "PICK"
-                    target = self._object_cell(obj_name)
-                    if target is not None:
-                        return self._nav_step_toward(target)
+                    if obj_cell is not None:
+                        return self._nav_step_toward(obj_cell)
                 color = obj_name.replace("_block", "").upper()
                 return f"MOVE_TO_{color}"
             blocker = blocker_for_target(obj_name)

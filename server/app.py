@@ -202,10 +202,13 @@ def _format_demo_step_response(step_out):
 
 
 @app.post("/demo/reset")
-def demo_reset(difficulty: str = "easy"):
-    """Start a fresh demo episode."""
+def demo_reset(difficulty: str = "easy", scenario_pack: str = "default"):
+    """Start a fresh demo episode. scenario_pack: default | pharmacy | warehouse | lab"""
     global _demo_env
     _demo_env = RoboReplanEnv(difficulty=difficulty)
+    # Apply scenario pack by patching the internal env config before reset
+    if scenario_pack != "default":
+        _demo_env._env.cfg.task.scenario_pack = scenario_pack
     obs = _demo_env.reset()
     return {"observation": obs.model_dump(), "done": False, "reward": 0.0}
 
@@ -221,6 +224,63 @@ def demo_step(action: str):
     return _format_demo_step_response(result)
 
 
+def _oracle_reasoning(env, action: str) -> str:
+    """Generate a human-readable <think> narration for the oracle's chosen action."""
+    try:
+        inner = env._env
+        state = inner.sim.get_state()
+        holding = state.holding
+        placements = inner._required_placements
+        failures = inner._known_failures
+        constraints = inner._active_constraints
+        completed = set(inner._completed_subgoals)
+        instruction = inner._instruction
+
+        # Build context strings
+        blocked_objs = [n for n, o in state.objects.items() if not o.reachable and o.in_bin is None]
+        remaining = [n for n, b in placements.items()
+                     if f"placed_{n}_in_bin_{b}" not in completed and
+                     not (state.objects.get(n) and state.objects[n].in_bin == b)]
+        constraint_str = f" Constraint: {', '.join(constraints)}." if constraints else ""
+        deadline_status = inner._deadline_status()
+        deadline_str = f" Deadlines active: {deadline_status}." if deadline_status else ""
+
+        if action == "SCAN_SCENE":
+            return (f"I need to survey the scene to reveal hidden object traits "
+                    f"before planning.{constraint_str}")
+        if action == "CLEAR_BLOCKER":
+            for n, o in state.objects.items():
+                if o.blocking and o.reachable:
+                    return (f"Plan: CLEAR_BLOCKER → MOVE_TO_{o.blocking.replace('_block','').upper()} → PICK → PLACE. "
+                            f"{n} is blocking {o.blocking}. Clearing it first.{constraint_str}")
+        if holding and action.startswith("PLACE_BIN_"):
+            bin_name = action.split("_")[-1]
+            target_bin = placements.get(holding, "?")
+            correct = target_bin == bin_name
+            return (f"I am holding {holding}. Target bin is {target_bin}. "
+                    f"{'Placing correctly' if correct else 'Placing in available bin'}.{constraint_str}")
+        if action.startswith("MOVE_TO_"):
+            color = action.replace("MOVE_TO_", "").lower()
+            target = f"{color}_block"
+            if failures:
+                return (f"Previous failure: {failures[-1]}. Re-navigating to {target} to retry.{constraint_str}")
+            return (f"Plan: MOVE_TO_{color.upper()} → PICK → PLACE_BIN_{placements.get(target,'?')}. "
+                    f"Moving to {target} now.{constraint_str}{deadline_str}")
+        if action == "PICK":
+            if failures and any("FAILED_SLIP" in f for f in failures):
+                return (f"Previous grasp slip detected ({failures[-1]}). "
+                        f"Retrying PICK — repositioning and attempting again.")
+            return (f"Gripper is adjacent to target. Attempting to grasp.{constraint_str}")
+        if action in ("MOVE_NORTH", "MOVE_SOUTH", "MOVE_EAST", "MOVE_WEST"):
+            if remaining:
+                target = remaining[0]
+                return (f"Navigating toward {target} "
+                        f"(target bin: {placements.get(target,'?')}).{constraint_str}{deadline_str}")
+        return f"Executing {action}.{constraint_str}"
+    except Exception:
+        return f"Executing {action}."
+
+
 @app.get("/demo/oracle")
 def demo_oracle():
     """Step using the oracle policy — shows optimal behavior for demo."""
@@ -229,9 +289,11 @@ def demo_oracle():
         _demo_env = RoboReplanEnv(difficulty="easy")
         _demo_env.reset()
     oracle = _demo_env._env._oracle_action() or "SCAN_SCENE"
+    reasoning = _oracle_reasoning(_demo_env, oracle)
     result = _demo_env.step(RoboAction(action=oracle))
     payload = _format_demo_step_response(result)
     payload["action_taken"] = oracle
+    payload["reasoning"] = reasoning
     return payload
 
 

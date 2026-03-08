@@ -25,7 +25,7 @@
     {
       "seed": 1000,
       "success": false,
-      "return": -29.560000000000002,
+      "return": -43.709999999999994,
       "steps": 5
     },
     {
@@ -37,25 +37,25 @@
     {
       "seed": 1002,
       "success": true,
-      "return": 24.54,
+      "return": 10.59,
       "steps": 5
     },
     {
       "seed": 1003,
       "success": false,
-      "return": -33.56,
+      "return": -34.71,
       "steps": 5
     },
     {
       "seed": 1004,
       "success": true,
-      "return": 20.48,
+      "return": 20.18,
       "steps": 5
     },
     {
       "seed": 1005,
       "success": true,
-      "return": 18.04,
+      "return": 10.790000000000001,
       "steps": 5
     },
     {
@@ -67,31 +67,31 @@
     {
       "seed": 1007,
       "success": false,
-      "return": -39.11000000000001,
+      "return": -37.36000000000001,
       "steps": 5
     },
     {
       "seed": 1008,
       "success": false,
-      "return": -33.56,
+      "return": -36.56,
       "steps": 5
     },
     {
       "seed": 1009,
       "success": false,
-      "return": -40.059999999999995,
+      "return": -43.059999999999995,
       "steps": 5
     },
     {
       "seed": 1010,
       "success": false,
-      "return": -34.56,
+      "return": -41.559999999999995,
       "steps": 5
     },
     {
       "seed": 1011,
-      "success": true,
-      "return": 11.84,
+      "success": false,
+      "return": -46.010000000000005,
       "steps": 5
     },
     {
@@ -103,8 +103,8 @@
     {
       "seed": 1013,
       "success": true,
-      "return": 17.74,
-      "steps": 4
+      "return": 16.79,
+      "steps": 5
     },
     {
       "seed": 1014,
@@ -115,19 +115,19 @@
     {
       "seed": 1015,
       "success": false,
-      "return": -40.059999999999995,
+      "return": -38.21,
       "steps": 5
     },
     {
       "seed": 1016,
       "success": false,
-      "return": -39.910000000000004,
+      "return": -42.209999999999994,
       "steps": 5
     },
     {
       "seed": 1017,
       "success": false,
-      "return": -32.06,
+      "return": -36.21,
       "steps": 5
     },
     {
@@ -139,13 +139,13 @@
     {
       "seed": 1019,
       "success": true,
-      "return": 16.14,
+      "return": 13.14,
       "steps": 5
     }
   ],
   "summary": {
-    "success_rate": 0.35,
-    "avg_return": -17.328,
-    "avg_steps": 4.9
+    "success_rate": 0.3,
+    "avg_return": -23.051,
+    "avg_steps": 4.95
   }
 }
