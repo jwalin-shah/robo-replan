@@ -975,10 +975,6 @@ async function modelStep() {
     });
     const data = await resp.json();
     let action = data.action || 'SCAN_SCENE';
-    const valid = currentObs.validActions || [];
-    if (action === 'SCAN_SCENE' && valid.some(v => v !== 'SCAN_SCENE')) {
-      action = chooseNonScanFallback(valid.filter(v => v !== 'SCAN_SCENE'));
-    }
     await manualStepAsync(action);
   } catch (e) {
     await manualStepAsync('SCAN_SCENE');

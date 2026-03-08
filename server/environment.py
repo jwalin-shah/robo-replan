@@ -261,8 +261,22 @@ class TabletopPlanningEnv:
             r += w.correct_placement if correct else w.wrong_bin
             if not correct and self._active_constraints:
                 r += w.constraint_violation  # extra hit for constraint violation
-        if action == "SCAN_SCENE" and not self._scanned:
-            r += w.useful_scan  # first scan only
+        if action == "SCAN_SCENE":
+            if not self._scanned:
+                r += w.useful_scan  # first scan only
+            # Penalize avoidable scans when actionable moves exist.
+            valid_now = self._valid_actions()
+            if any(a != "SCAN_SCENE" for a in valid_now):
+                r += w.useless_action
+            # Penalize scan loops with increasing severity.
+            streak = 0
+            for a in reversed(self._action_history):
+                if a == "SCAN_SCENE":
+                    streak += 1
+                else:
+                    break
+            if streak > 0:
+                r -= min(1.5, 0.25 * streak)
 
         # First recovery after failure
         if self._known_failures and result == "SUCCESS" and action != "SCAN_SCENE":
