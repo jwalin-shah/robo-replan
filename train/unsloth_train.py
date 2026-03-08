@@ -1,5 +1,5 @@
 """
-RoboReplan — Unsloth + GRPO training (H100 optimized)
+RoboReplan — Unsloth + GRPO training (environment-aware)
 
 Achieves 2-3x speedup over vanilla TRL via Unsloth's custom CUDA kernels.
 SFT warmstart prevents the mode-collapse failure seen with cold-start GRPO.
@@ -7,7 +7,7 @@ SFT warmstart prevents the mode-collapse failure seen with cold-start GRPO.
 SSH paste-and-run:
     cd ~/tabletop-planning-env
     pip install unsloth trl transformers datasets matplotlib --quiet
-    MODEL=Qwen/Qwen2.5-7B-Instruct DIFFICULTY=medium python train/unsloth_train.py
+    TRAIN_ENV=auto MODEL=Qwen/Qwen2.5-7B-Instruct DIFFICULTY=medium python train/unsloth_train.py
 """
 import os, re, sys, json, random, time
 sys.path.insert(0, ".")
@@ -38,6 +38,7 @@ from server.robosim.randomizer import ScenarioConfig
 MODEL      = os.environ.get("MODEL", "Qwen/Qwen2.5-7B-Instruct")
 DIFFICULTY = os.environ.get("DIFFICULTY", "medium")
 LORA_RANK  = int(os.environ.get("LORA_RANK", "32"))
+TRAIN_ENV  = os.environ.get("TRAIN_ENV", "auto").strip().lower()
 
 ORACLE_EPISODES       = int(os.environ.get("ORACLE_EPISODES", "2000"))
 SFT_MAX_STEPS         = int(os.environ.get("SFT_MAX_STEPS", "600"))
@@ -59,6 +60,102 @@ PLOT_PATH             = os.environ.get("PLOT_PATH", "./logs/training_curve_unslo
 
 ACTIONS = [a.value for a in Action]
 ACTION_STR = " | ".join(ACTIONS)
+
+def _parse_boolish(name: str):
+    v = os.environ.get(name)
+    if v is None:
+        return None
+    v = v.strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    if v in ("auto", ""):
+        return None
+    raise ValueError(f"{name} must be one of true/false/auto (or 1/0), got {v!r}")
+
+def _pick_runtime_profile(train_env: str):
+    cuda = torch.cuda.is_available()
+    gpu_name = torch.cuda.get_device_name(0) if cuda else "cpu"
+    cap = torch.cuda.get_device_capability(0) if cuda else (0, 0)
+    total_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3) if cuda else 0.0
+    bf16_capable = cuda and bool(torch.cuda.is_bf16_supported())
+
+    if train_env not in ("auto", "h100", "space", "cpu"):
+        raise ValueError("TRAIN_ENV must be one of: auto, h100, space, cpu")
+
+    if train_env == "cpu":
+        profile = "cpu"
+    elif train_env == "h100":
+        profile = "h100"
+    elif train_env == "space":
+        profile = "space"
+    else:
+        # Auto: treat very large datacenter cards as h100-like, otherwise space-like.
+        if cuda and ("h100" in gpu_name.lower() or total_mem_gb >= 70 or cap[0] >= 9):
+            profile = "h100"
+        elif cuda:
+            profile = "space"
+        else:
+            profile = "cpu"
+
+    if profile == "h100":
+        default_dtype = torch.bfloat16
+        default_load_4bit = False
+    elif profile == "space":
+        default_dtype = torch.bfloat16 if bf16_capable else torch.float16
+        default_load_4bit = True
+    else:
+        default_dtype = torch.float32
+        default_load_4bit = False
+
+    dtype_override = os.environ.get("UNSLOTH_DTYPE", "auto").strip().lower()
+    dtype_map = {
+        "auto": None,
+        "bf16": torch.bfloat16,
+        "bfloat16": torch.bfloat16,
+        "fp16": torch.float16,
+        "float16": torch.float16,
+        "fp32": torch.float32,
+        "float32": torch.float32,
+    }
+    if dtype_override not in dtype_map:
+        raise ValueError(f"UNSLOTH_DTYPE must be one of {list(dtype_map.keys())}, got {dtype_override!r}")
+    dtype = dtype_map[dtype_override] or default_dtype
+
+    load_4bit_override = _parse_boolish("UNSLOTH_LOAD_IN_4BIT")
+    load_in_4bit = default_load_4bit if load_4bit_override is None else load_4bit_override
+
+    # Guardrails for invalid combos.
+    if not cuda:
+        load_in_4bit = False
+        if dtype in (torch.float16, torch.bfloat16):
+            dtype = torch.float32
+    if dtype == torch.bfloat16 and not bf16_capable:
+        dtype = torch.float16 if cuda else torch.float32
+
+    bf16_override = _parse_boolish("UNSLOTH_BF16")
+    fp16_override = _parse_boolish("UNSLOTH_FP16")
+    bf16_train = (dtype == torch.bfloat16) if bf16_override is None else bf16_override
+    fp16_train = (dtype == torch.float16) if fp16_override is None else fp16_override
+    if bf16_train and fp16_train:
+        raise ValueError("UNSLOTH_BF16 and UNSLOTH_FP16 cannot both be true")
+    if not cuda:
+        bf16_train = False
+        fp16_train = False
+
+    return {
+        "profile": profile,
+        "cuda": cuda,
+        "gpu_name": gpu_name,
+        "gpu_mem_gb": total_mem_gb,
+        "dtype": dtype,
+        "load_in_4bit": load_in_4bit,
+        "bf16_train": bf16_train,
+        "fp16_train": fp16_train,
+    }
+
+RUNTIME = _pick_runtime_profile(TRAIN_ENV)
 
 SYSTEM = (
     "You are a robot planning agent on a tabletop. Complete manipulation tasks "
@@ -86,6 +183,10 @@ print(f"  Model:      {MODEL}")
 print(f"  Difficulty: {DIFFICULTY}")
 print(f"  LoRA rank:  {LORA_RANK}")
 print(f"  Generations:{GRPO_GENERATIONS}  Temp:{GRPO_TEMPERATURE}")
+print(f"  Train env:  {TRAIN_ENV} -> profile={RUNTIME['profile']}")
+print(f"  Device:     {RUNTIME['gpu_name']}  CUDA={RUNTIME['cuda']}  VRAM={RUNTIME['gpu_mem_gb']:.1f}GB")
+print(f"  Precision:  dtype={str(RUNTIME['dtype']).split('.')[-1]}  bf16={RUNTIME['bf16_train']}  fp16={RUNTIME['fp16_train']}")
+print(f"  Quantized:  load_in_4bit={RUNTIME['load_in_4bit']}")
 print(f"{'='*60}\n")
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -188,8 +289,8 @@ from unsloth import FastLanguageModel
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=MODEL,
     max_seq_length=1024,
-    dtype=torch.bfloat16,   # Full bf16 on H100 — no quantization needed
-    load_in_4bit=False,
+    dtype=RUNTIME["dtype"],
+    load_in_4bit=RUNTIME["load_in_4bit"],
 )
 tokenizer.padding_side = 'left'
 if tokenizer.pad_token is None:
@@ -270,7 +371,8 @@ sft_args = SFTConfig(
     report_to='none',
     dataset_text_field='text',
     max_seq_length=512,
-    bf16=True,
+    bf16=RUNTIME["bf16_train"],
+    fp16=RUNTIME["fp16_train"],
 )
 
 sft_trainer = SFTTrainer(
@@ -363,7 +465,8 @@ grpo_config = GRPOConfig(
     save_only_model=True,
     push_to_hub=False,
     report_to='none',
-    bf16=True,
+    bf16=RUNTIME["bf16_train"],
+    fp16=RUNTIME["fp16_train"],
 )
 
 model.warnings_issued = {}   # suppress TRL version warning
