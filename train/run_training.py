@@ -351,6 +351,7 @@ for ep in range(ORACLE_EPISODES):
                 'answer':     obs.oracle_hint,
                 'scenario':   scenario_json,
                 'step':       step_num,
+                'history_actions': list(obs.action_history),
             })
         action = obs.oracle_hint or 'SCAN_SCENE'
         r = env.step(action)
@@ -481,6 +482,7 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
     batch_oracles = []
     rewards = []
     step_values = kwargs.get("step")
+    history_action_values = kwargs.get("history_actions")
 
     for i, completion in enumerate(completions):
         text      = completion if isinstance(completion, str) else completion[0].get('content', '')
@@ -523,13 +525,29 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             eval_env._required_placements = dict(scen.targets)
             eval_env._active_constraints  = [scen.constraint] if scen.constraint else []
 
-            # Reconstruct the exact rollout state for this training row.
-            step_i = int(step_values[i]) if step_values is not None else 0
-            for _ in range(max(0, step_i)):
-                oracle_pre = eval_env._oracle_action() or "SCAN_SCENE"
-                pre = eval_env.step(oracle_pre)
+            # Reconstruct rollout state from recorded action history.
+            replay_done = False
+            replay_actions = []
+            if history_action_values is not None and history_action_values[i] is not None:
+                replay_actions = list(history_action_values[i])
+            elif step_values is not None:
+                step_i = int(step_values[i])
+                replay_actions = [(eval_env._oracle_action() or "SCAN_SCENE") for _ in range(max(0, step_i))]
+
+            for pre_action in replay_actions:
+                pre = eval_env.step(pre_action)
                 if pre.done:
+                    replay_done = True
                     break
+
+            if replay_done:
+                shaped_reward = -2.0
+                rewards.append(shaped_reward)
+                batch_actions.append(action)
+                batch_rewards.append(shaped_reward)
+                batch_results.append("REPLAY_DONE")
+                batch_oracles.append(None)
+                continue
 
             valid_now = set(eval_env._valid_actions())
             if action not in valid_now:
