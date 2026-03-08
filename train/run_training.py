@@ -28,6 +28,10 @@ MODEL_FALLBACKS = [
     "Qwen/Qwen2.5-1.5B-Instruct",
     "Qwen/Qwen2.5-0.5B-Instruct",
 ]
+STRICT_MODEL = os.environ.get("STRICT_MODEL", "0").lower() in ("1", "true", "yes")
+ORACLE_EPISODES = int(os.environ.get("ORACLE_EPISODES", "800"))
+BASELINE_EPISODES = int(os.environ.get("BASELINE_EPISODES", "50"))
+FINAL_EVAL_EPISODES = int(os.environ.get("FINAL_EVAL_EPISODES", "50"))
 MONITOR_EVERY = int(os.environ.get("MONITOR_EVERY", "25"))
 INCLUDE_VALID_HINT = os.environ.get("INCLUDE_VALID_HINT", "0").lower() in ("1", "true", "yes")
 METRICS_JSONL = os.environ.get("METRICS_JSONL", "./logs/train_metrics.jsonl")
@@ -244,7 +248,7 @@ cfg.obs.include_oracle_hint = True
 env = TabletopPlanningEnv(config=cfg)
 
 rows = []
-for ep in range(800):
+for ep in range(ORACLE_EPISODES):
     obs = env.reset()
     scenario_json = scenario_to_json(env._scenario_cfg)
     step_num = 0
@@ -267,7 +271,7 @@ for ep in range(800):
         if r.done:
             break
     if ep % 100 == 0:
-        print(f"  Episode {ep}/800, rows: {len(rows)}")
+        print(f"  Episode {ep}/{ORACLE_EPISODES}, rows: {len(rows)}")
 
 dataset = Dataset.from_list(rows).train_test_split(test_size=0.1)
 print(f"Dataset: {len(rows)} steps ({len(dataset['train'])} train, {len(dataset['test'])} eval)")
@@ -289,6 +293,10 @@ for candidate in MODEL_FALLBACKS:
     except Exception as exc:
         load_error = exc
         print(f"Model load failed for {candidate}: {exc}")
+        if STRICT_MODEL and candidate == MODEL:
+            raise RuntimeError(
+                f"STRICT_MODEL=1 and requested model failed to load: {MODEL}"
+            ) from exc
         continue
 
 if resolved_model is None:
@@ -573,7 +581,7 @@ def trained_policy(obs):
     out = tokenizer.decode(new_ids, skip_special_tokens=True)
     return extract_action(out) or random.choice(ACTIONS)
 
-after = eval_policy(trained_policy, n_episodes=50)
+after = eval_policy(trained_policy, n_episodes=FINAL_EVAL_EPISODES)
 print(f"  Success rate: {after['success_rate']:.0%}")
 print(f"  Avg reward:   {after['avg_reward']:.2f}")
 print()
