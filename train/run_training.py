@@ -100,6 +100,7 @@ USE_SIMPLE_REWARD = os.environ.get("USE_SIMPLE_REWARD", "1").lower() in ("1", "t
 SIMPLE_STEP_PENALTY_BASE = float(os.environ.get("SIMPLE_STEP_PENALTY_BASE", "0.05"))
 SIMPLE_STEP_PENALTY_GROWTH = float(os.environ.get("SIMPLE_STEP_PENALTY_GROWTH", "0.02"))
 SIMPLE_TERMINAL_FAIL_PENALTY = float(os.environ.get("SIMPLE_TERMINAL_FAIL_PENALTY", "8.0"))
+SIMPLE_REPEAT_ACTION_PENALTY = float(os.environ.get("SIMPLE_REPEAT_ACTION_PENALTY", "0.35"))
 
 if FAST_MODE:
     # Instance-friendly defaults: larger batches and shorter GRPO rollouts.
@@ -198,6 +199,17 @@ def extract_action(text: str):
         return first_span
     first_words = " ".join(first_span.split(" ")[:3]).strip()
     spaced_to_action = {a.replace("_", " "): a for a in ACTIONS}
+    # Normalize common alias verbs to canonical actions.
+    alias_map = {
+        "BREAK BLOCKER": "CLEAR_BLOCKER",
+        "BREAK_BLOCKER": "CLEAR_BLOCKER",
+        "UNLOCK BLOCKER": "CLEAR_BLOCKER",
+        "UNLOCK_BLOCKER": "CLEAR_BLOCKER",
+        "UNBLOCK BLOCKER": "CLEAR_BLOCKER",
+        "UNBLOCK_BLOCKER": "CLEAR_BLOCKER",
+    }
+    if first_span in alias_map:
+        return alias_map[first_span]
     if first_words in spaced_to_action:
         return spaced_to_action[first_words]
     if first_span in ("PLACE", "PLACE BIN", "PLACE BIN A", "PLACE A"):
@@ -238,6 +250,8 @@ def extract_action(text: str):
     if normalized in ("PLACE BIN B", "PLACE B"):
         return "PLACE_BIN_B"
     if normalized in ("CLEAR BLOCKER", "CLEAR"):
+        return "CLEAR_BLOCKER"
+    if normalized in ("BREAK BLOCKER", "UNLOCK BLOCKER", "UNBLOCK BLOCKER"):
         return "CLEAR_BLOCKER"
     if normalized in ("SCAN SCENE", "SCAN"):
         return "SCAN_SCENE"
@@ -637,6 +651,15 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
                 # Simple shaping: each step costs more than the previous step.
                 step_idx = int(result.info.get("step", 1))
                 shaped_reward -= SIMPLE_STEP_PENALTY_BASE + SIMPLE_STEP_PENALTY_GROWTH * max(0, step_idx - 1)
+                # Light anti-loop penalty: repeated same action gets progressively costlier.
+                repeat_tail = 0
+                for h in reversed(history):
+                    if h == action:
+                        repeat_tail += 1
+                    else:
+                        break
+                if repeat_tail > 0:
+                    shaped_reward -= SIMPLE_REPEAT_ACTION_PENALTY * min(repeat_tail, 6)
                 # Strong terminal penalty for ending without completing all goals.
                 if result.done and not eval_env._all_goals_complete():
                     shaped_reward -= SIMPLE_TERMINAL_FAIL_PENALTY
