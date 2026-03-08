@@ -10,10 +10,47 @@ import json
 import random
 import os
 import time
+import subprocess
+import importlib
+
+
+AUTO_INSTALL_DEPS = os.environ.get("AUTO_INSTALL_DEPS", "0").lower() in ("1", "true", "yes")
+REQUIRED_MODULES = [
+    ("datasets", "datasets"),
+    ("torch", "torch"),
+    ("transformers", "transformers"),
+    ("trl", "trl"),
+]
+missing_packages = []
+for module_name, package_name in REQUIRED_MODULES:
+    try:
+        importlib.import_module(module_name)
+    except ImportError:
+        missing_packages.append(package_name)
+
+if missing_packages:
+    pip_cmd = f"{sys.executable} -m pip install " + " ".join(missing_packages)
+    if not AUTO_INSTALL_DEPS:
+        raise RuntimeError(
+            "Missing Python packages: "
+            + ", ".join(sorted(set(missing_packages)))
+            + ". Install with:\n"
+            + pip_cmd
+            + "\nOr rerun with AUTO_INSTALL_DEPS=1."
+        )
+    print(f"Installing missing dependencies: {sorted(set(missing_packages))}")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", *sorted(set(missing_packages))])
+
 from datasets import Dataset
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import GRPOTrainer, GRPOConfig
+
+try:
+    from trl import SFTTrainer, SFTConfig
+except Exception:
+    SFTTrainer = None
+    SFTConfig = None
 
 from server.config import EnvConfig
 from server.environment import TabletopPlanningEnv
@@ -42,6 +79,17 @@ GRPO_BATCH_SIZE = int(os.environ.get("GRPO_BATCH_SIZE", "4"))
 GRPO_GRAD_ACCUM = int(os.environ.get("GRPO_GRAD_ACCUM", "4"))
 GRPO_NUM_GENERATIONS = int(os.environ.get("GRPO_NUM_GENERATIONS", "4"))
 GRPO_MAX_COMPLETION_LENGTH = int(os.environ.get("GRPO_MAX_COMPLETION_LENGTH", "12"))
+GRPO_TEMPERATURE = float(os.environ.get("GRPO_TEMPERATURE", "1.1"))
+GRPO_TOP_P = float(os.environ.get("GRPO_TOP_P", "0.98"))
+ENABLE_SFT_WARMSTART = os.environ.get("ENABLE_SFT_WARMSTART", "0").lower() in ("1", "true", "yes")
+SFT_EPOCHS = float(os.environ.get("SFT_EPOCHS", "1"))
+SFT_MAX_STEPS = int(os.environ.get("SFT_MAX_STEPS", "300"))
+SFT_LR = float(os.environ.get("SFT_LR", "2e-5"))
+SFT_BATCH_SIZE = int(os.environ.get("SFT_BATCH_SIZE", "4"))
+SFT_GRAD_ACCUM = int(os.environ.get("SFT_GRAD_ACCUM", "2"))
+SCAN_ORACLE_KEEP_PROB = float(os.environ.get("SCAN_ORACLE_KEEP_PROB", "0.35"))
+PICK_LOOP_PENALTY = float(os.environ.get("PICK_LOOP_PENALTY", "2.5"))
+INVALID_ACTION_BASE_PENALTY = float(os.environ.get("INVALID_ACTION_BASE_PENALTY", "4.0"))
 
 CFG_BY_NAME = {
     "easy": EnvConfig.easy,
@@ -188,6 +236,8 @@ def parse_prompt_context(prompt_messages):
     valid_actions = set()
     last_action = None
     last_result = None
+    history = []
+    progress_pct = None
 
     valid_match = re.search(r'Valid now:\s*(.*)', user_text)
     if valid_match:
@@ -202,7 +252,17 @@ def parse_prompt_context(prompt_messages):
         last_action = None if la == 'NONE' else la
         last_result = None if lr == 'N/A' else lr
 
-    return valid_actions, last_action, last_result
+    history_match = re.search(r'History:\s*(.*)', user_text)
+    if history_match:
+        hist_raw = history_match.group(1).strip()
+        if hist_raw.lower() != 'none':
+            history = [h.strip().upper() for h in hist_raw.split('->') if h.strip()]
+
+    progress_match = re.search(r'Progress:\s*(\d+)%', user_text)
+    if progress_match:
+        progress_pct = int(progress_match.group(1)) / 100.0
+
+    return valid_actions, last_action, last_result, history, progress_pct
 
 def eval_policy(policy_fn, n_episodes=50, seed: int | None = None):
     if seed is not None:
@@ -254,6 +314,14 @@ for ep in range(ORACLE_EPISODES):
     step_num = 0
     for _ in range(20):
         if obs.oracle_hint:
+            if obs.oracle_hint == 'SCAN_SCENE' and random.random() > SCAN_ORACLE_KEEP_PROB:
+                action = obs.oracle_hint or 'SCAN_SCENE'
+                r = env.step(action)
+                obs = r.observation
+                step_num += 1
+                if r.done:
+                    break
+                continue
             rows.append({
                 'prompt':     [
                     {'role': 'system', 'content': SYSTEM},
@@ -309,6 +377,49 @@ print(f"Using model: {resolved_model}")
 model.generation_config.pad_token_id = tokenizer.pad_token_id
 print(f"Loaded on: {next(model.parameters()).device}")
 
+# ── Optional SFT warm-start ───────────────────────────────────────────
+
+if ENABLE_SFT_WARMSTART:
+    if SFTTrainer is None or SFTConfig is None:
+        raise RuntimeError("ENABLE_SFT_WARMSTART=1 but SFTTrainer/SFTConfig are unavailable in this TRL install")
+
+    print("\n" + "=" * 50)
+    print("PHASE: SFT WARM-START")
+    print("=" * 50)
+    sft_rows = []
+    for row in dataset['train']:
+        chat = row['prompt'] + [{'role': 'assistant', 'content': row['answer']}]
+        text = tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=False)
+        sft_rows.append({"text": text})
+    sft_dataset = Dataset.from_list(sft_rows)
+    print(f"SFT rows: {len(sft_rows)}")
+
+    sft_args = SFTConfig(
+        output_dir='./outputs/sft_warmstart',
+        num_train_epochs=SFT_EPOCHS,
+        max_steps=SFT_MAX_STEPS,
+        per_device_train_batch_size=SFT_BATCH_SIZE,
+        gradient_accumulation_steps=SFT_GRAD_ACCUM,
+        learning_rate=SFT_LR,
+        logging_steps=20,
+        save_strategy='no',
+        report_to='none',
+        dataset_text_field='text',
+        max_seq_length=512,
+        bf16=True,
+    )
+    sft_trainer = SFTTrainer(
+        model=model,
+        args=sft_args,
+        train_dataset=sft_dataset,
+        processing_class=tokenizer,
+    )
+    sft_trainer.train()
+    del sft_trainer
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    print("SFT warm-start done")
+
 # ── Phase: GRPO ────────────────────────────────────────────────────────
 
 print("\n" + "=" * 50)
@@ -328,8 +439,19 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             "invalid": 0,
             "parse_fail": 0,
             "action_counts": {},
+            "dominance_penalty_scale": 1.0,
+            "scan_penalty_scale": 1.0,
+            "invalid_pick_scale": 1.0,
         }
     reward_fn._calls += 1
+
+    total_seen = max(1, reward_fn._stats["total"])
+    top_action = None
+    top_share = 0.0
+    if reward_fn._stats["action_counts"]:
+        top_action, top_count = max(reward_fn._stats["action_counts"].items(), key=lambda kv: kv[1])
+        top_share = top_count / total_seen
+    reward_fn._stats["dominance_penalty_scale"] = 1.0 + max(0.0, top_share - 0.55) * 7.0
 
     batch_actions = []
     batch_rewards = []
@@ -351,9 +473,17 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
         reward_fn._stats["total"] += 1
         reward_fn._stats["action_counts"][action] = reward_fn._stats["action_counts"].get(action, 0) + 1
         try:
-            valid_actions, last_action, last_result = parse_prompt_context(prompts[i] if prompts else None)
+            valid_actions, last_action, last_result, history, progress_pct = parse_prompt_context(prompts[i] if prompts else None)
             if valid_actions and action not in valid_actions:
-                shaped_reward = -3.0
+                repeat_tail = 0
+                for h in reversed(history):
+                    if h == action:
+                        repeat_tail += 1
+                    else:
+                        break
+                shaped_reward = -INVALID_ACTION_BASE_PENALTY - (0.6 * min(repeat_tail, 6))
+                if action == "PICK":
+                    shaped_reward -= PICK_LOOP_PENALTY * reward_fn._stats["invalid_pick_scale"]
                 rewards.append(shaped_reward)
                 reward_fn._stats["invalid"] += 1
                 batch_actions.append(action)
@@ -381,7 +511,15 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
 
             valid_now = set(eval_env._valid_actions())
             if action not in valid_now:
-                shaped_reward = -4.0
+                repeat_tail = 0
+                for h in reversed(history):
+                    if h == action:
+                        repeat_tail += 1
+                    else:
+                        break
+                shaped_reward = -INVALID_ACTION_BASE_PENALTY - (0.8 * min(repeat_tail, 6))
+                if action == "PICK":
+                    shaped_reward -= PICK_LOOP_PENALTY * reward_fn._stats["invalid_pick_scale"]
                 rewards.append(shaped_reward)
                 reward_fn._stats["invalid"] += 1
                 batch_actions.append(action)
@@ -408,24 +546,73 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
 
             # Penalize repeated failed PICK attempts to break local loops.
             if action == 'PICK' and last_action == 'PICK' and last_result and last_result.startswith('FAILED'):
-                shaped_reward -= 1.0
+                shaped_reward -= 1.5 * reward_fn._stats["invalid_pick_scale"]
 
             # Discourage no-op behavior and repeated identical actions.
             if action == 'SCAN_SCENE':
-                shaped_reward -= 0.25
+                scan_tail = 0
+                for h in reversed(history):
+                    if h == 'SCAN_SCENE':
+                        scan_tail += 1
+                    else:
+                        break
+                scan_streak = scan_tail + 1
+                if scan_streak == 1:
+                    scan_penalty = 0.35
+                elif scan_streak == 2:
+                    scan_penalty = 0.9
+                elif scan_streak == 3:
+                    scan_penalty = 1.8
+                else:
+                    scan_penalty = 3.0 + 0.5 * (scan_streak - 4)
+                shaped_reward -= scan_penalty * reward_fn._stats["scan_penalty_scale"]
                 # Repeated scanning when oracle wants progress should be heavily discouraged.
                 if oracle_action and oracle_action != 'SCAN_SCENE':
-                    shaped_reward -= 1.25
+                    shaped_reward -= 1.5 * reward_fn._stats["scan_penalty_scale"]
                 else:
-                    shaped_reward += 0.1
+                    shaped_reward += 0.05
             if last_action and action == last_action:
                 shaped_reward -= 0.5
+
+            if progress_delta <= 1e-6 and last_action and action == last_action:
+                repeat_tail = 0
+                for h in reversed(history):
+                    if h == action:
+                        repeat_tail += 1
+                    else:
+                        break
+                shaped_reward -= (0.4 + 0.2 * min(repeat_tail, 6))
+
+            if progress_delta <= 1e-6 and len(history) >= 3 and len(set(history[-3:])) == 1:
+                shaped_reward -= 0.9
+
+            if action == "PICK" and result.info.get("result", "").startswith("FAILED"):
+                pick_tail = 0
+                for h in reversed(history):
+                    if h == "PICK":
+                        pick_tail += 1
+                    else:
+                        break
+                shaped_reward -= (1.0 + 0.5 * min(pick_tail, 6)) * reward_fn._stats["invalid_pick_scale"]
+
+            if progress_delta <= 1e-6 and progress_pct is not None and progress_pct < 0.95:
+                shaped_reward -= 0.15
 
             # Reward oracle alignment only when oracle action is in model action space.
             if oracle_action in ACTIONS and action == oracle_action:
                 shaped_reward += 2.0
             elif oracle_action in ACTIONS and action != oracle_action:
                 shaped_reward -= 0.6
+
+            # If the policy is collapsing on one dominant action, punish choosing it
+            # when it does not match oracle guidance.
+            if (
+                top_action
+                and action == top_action
+                and oracle_action in ACTIONS
+                and action != oracle_action
+            ):
+                shaped_reward -= 1.8 * reward_fn._stats["dominance_penalty_scale"]
 
             # Explicitly reward actual task progress.
             if progress_delta > 0:
@@ -482,11 +669,20 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             collapse_flag = "COLLAPSE_RISK:low_reward_variance"
         if top_actions and top_actions[0][1] / total > 0.7:
             collapse_flag = "COLLAPSE_RISK:action_dominance"
+
+        if collapse_flag.startswith("COLLAPSE_RISK"):
+            reward_fn._stats["scan_penalty_scale"] = min(3.0, reward_fn._stats["scan_penalty_scale"] + 0.15)
+            reward_fn._stats["invalid_pick_scale"] = min(3.5, reward_fn._stats["invalid_pick_scale"] + 0.2)
+        else:
+            reward_fn._stats["scan_penalty_scale"] = max(1.0, reward_fn._stats["scan_penalty_scale"] - 0.05)
+            reward_fn._stats["invalid_pick_scale"] = max(1.0, reward_fn._stats["invalid_pick_scale"] - 0.05)
         print(
             "[train-monitor]",
             f"elapsed={elapsed/60:.1f}m",
             f"batch_std={batch_std:.3f}",
             f"flat_streak={reward_fn._flat_streak}",
+            f"scan_penalty_scale={reward_fn._stats['scan_penalty_scale']:.2f}",
+            f"invalid_pick_scale={reward_fn._stats['invalid_pick_scale']:.2f}",
             f"status={collapse_flag}",
         )
         # Live telemetry for dashboards / quick plotting.
@@ -527,7 +723,8 @@ grpo_config = GRPOConfig(
     learning_rate=1e-5,
     num_generations=GRPO_NUM_GENERATIONS,
     max_completion_length=GRPO_MAX_COMPLETION_LENGTH,
-    temperature=0.85,
+    temperature=GRPO_TEMPERATURE,
+    top_p=GRPO_TOP_P,
     logging_steps=5,
     save_steps=400,
     save_total_limit=2,
