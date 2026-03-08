@@ -191,6 +191,13 @@ print("=" * 50)
 def reward_fn(completions, prompts=None, scenario=None, **kwargs):
     if not hasattr(reward_fn, "_calls"):
         reward_fn._calls = 0
+        reward_fn._stats = {
+            "total": 0,
+            "valid": 0,
+            "invalid": 0,
+            "parse_fail": 0,
+            "action_counts": {},
+        }
     reward_fn._calls += 1
 
     batch_actions = []
@@ -205,17 +212,23 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
 
         if action is None:
             rewards.append(-2.0)
+            reward_fn._stats["total"] += 1
+            reward_fn._stats["parse_fail"] += 1
             continue
+        reward_fn._stats["total"] += 1
+        reward_fn._stats["action_counts"][action] = reward_fn._stats["action_counts"].get(action, 0) + 1
         try:
             valid_actions, last_action, last_result = parse_prompt_context(prompts[i] if prompts else None)
             if valid_actions and action not in valid_actions:
                 shaped_reward = -3.0
                 rewards.append(shaped_reward)
+                reward_fn._stats["invalid"] += 1
                 batch_actions.append(action)
                 batch_rewards.append(shaped_reward)
                 batch_results.append("FAILED_INVALID")
                 batch_oracles.append(None)
                 continue
+            reward_fn._stats["valid"] += 1
 
             eval_env = TabletopPlanningEnv(config=EnvConfig.easy())
             scen = json_to_scenario(scenario[i])
@@ -267,6 +280,13 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             batch_oracles.append(None)
 
     if reward_fn._calls % 50 == 0:
+        stats = reward_fn._stats
+        total = max(1, stats["total"])
+        valid_rate = 100.0 * stats["valid"] / total
+        invalid_rate = 100.0 * stats["invalid"] / total
+        parse_fail_rate = 100.0 * stats["parse_fail"] / total
+        top_actions = sorted(stats["action_counts"].items(), key=lambda kv: kv[1], reverse=True)[:5]
+
         print(
             "[reward-debug]",
             f"call={reward_fn._calls}",
@@ -274,6 +294,13 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             f"actions={batch_actions[:4]}",
             f"results={batch_results[:4]}",
             f"oracles={batch_oracles[:4]}",
+        )
+        print(
+            "[validity]",
+            f"valid={valid_rate:.1f}%",
+            f"invalid={invalid_rate:.1f}%",
+            f"parse_fail={parse_fail_rate:.1f}%",
+            f"top_actions={top_actions}",
         )
     return rewards
 
