@@ -621,7 +621,7 @@ class TabletopPlanningEnv:
                 if self._nav_enabled() and not self._is_adjacent_to(obj.name):
                     continue
                 valid.append("CLEAR_BLOCKER")
-            break
+                break
 
         return valid
 
