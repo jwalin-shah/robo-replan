@@ -234,7 +234,7 @@ def demo_policy_action(req: PolicyActionRequest):
         out = pipe(
             req.prompt,
             return_full_text=False,
-            max_new_tokens=12,
+            max_new_tokens=128,
             do_sample=True,
             temperature=0.7,
             top_p=0.9,
@@ -248,8 +248,13 @@ def demo_policy_action(req: PolicyActionRequest):
         # Avoid no-op scan loops when other valid actions exist.
         if valid and action == "SCAN_SCENE" and any(v != "SCAN_SCENE" for v in valid):
             action = _smart_fallback_action([v for v in valid if v != "SCAN_SCENE"], req.prompt)
+        # Extract <think>...</think> reasoning separately for display and env reward
+        import re as _re
+        _m = _re.search(r'<think>(.*?)</think>', out, _re.DOTALL)
+        reasoning = _m.group(1).strip() if _m else ""
         return {
             "action": action,
+            "reasoning": reasoning,
             "raw_output": out,
             "raw_action": raw_action,
             "valid_actions_used": valid,

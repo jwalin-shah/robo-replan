@@ -1,0 +1,151 @@
+{
+  "seeds": [
+    1000,
+    1001,
+    1002,
+    1003,
+    1004,
+    1005,
+    1006,
+    1007,
+    1008,
+    1009,
+    1010,
+    1011,
+    1012,
+    1013,
+    1014,
+    1015,
+    1016,
+    1017,
+    1018,
+    1019
+  ],
+  "rows": [
+    {
+      "seed": 1000,
+      "success": false,
+      "return": -29.560000000000002,
+      "steps": 5
+    },
+    {
+      "seed": 1001,
+      "success": true,
+      "return": 17.74,
+      "steps": 4
+    },
+    {
+      "seed": 1002,
+      "success": true,
+      "return": 24.54,
+      "steps": 5
+    },
+    {
+      "seed": 1003,
+      "success": false,
+      "return": -33.56,
+      "steps": 5
+    },
+    {
+      "seed": 1004,
+      "success": true,
+      "return": 20.48,
+      "steps": 5
+    },
+    {
+      "seed": 1005,
+      "success": true,
+      "return": 18.04,
+      "steps": 5
+    },
+    {
+      "seed": 1006,
+      "success": false,
+      "return": -40.059999999999995,
+      "steps": 5
+    },
+    {
+      "seed": 1007,
+      "success": false,
+      "return": -39.11000000000001,
+      "steps": 5
+    },
+    {
+      "seed": 1008,
+      "success": false,
+      "return": -33.56,
+      "steps": 5
+    },
+    {
+      "seed": 1009,
+      "success": false,
+      "return": -40.059999999999995,
+      "steps": 5
+    },
+    {
+      "seed": 1010,
+      "success": false,
+      "return": -34.56,
+      "steps": 5
+    },
+    {
+      "seed": 1011,
+      "success": true,
+      "return": 11.84,
+      "steps": 5
+    },
+    {
+      "seed": 1012,
+      "success": false,
+      "return": -40.059999999999995,
+      "steps": 5
+    },
+    {
+      "seed": 1013,
+      "success": true,
+      "return": 17.74,
+      "steps": 4
+    },
+    {
+      "seed": 1014,
+      "success": false,
+      "return": -34.97,
+      "steps": 5
+    },
+    {
+      "seed": 1015,
+      "success": false,
+      "return": -40.059999999999995,
+      "steps": 5
+    },
+    {
+      "seed": 1016,
+      "success": false,
+      "return": -39.910000000000004,
+      "steps": 5
+    },
+    {
+      "seed": 1017,
+      "success": false,
+      "return": -32.06,
+      "steps": 5
+    },
+    {
+      "seed": 1018,
+      "success": false,
+      "return": -35.56,
+      "steps": 5
+    },
+    {
+      "seed": 1019,
+      "success": true,
+      "return": 16.14,
+      "steps": 5
+    }
+  ],
+  "summary": {
+    "success_rate": 0.35,
+    "avg_return": -17.328,
+    "avg_steps": 4.9
+  }
+}

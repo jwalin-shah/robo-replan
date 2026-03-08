@@ -1,0 +1,112 @@
+{
+  "reports": [
+    {
+      "level": "easy",
+      "episodes": 80,
+      "success_rate": 1.0,
+      "avg_return": 20.7275,
+      "avg_steps": 5.075,
+      "nav_mode_seen": 0,
+      "mid_task_changes": 0,
+      "failure_counts": {},
+      "action_counts": {
+        "PICK": 116,
+        "PLACE_BIN_B": 60,
+        "CLEAR_BLOCKER": 58,
+        "PLACE_BIN_A": 56,
+        "MOVE_TO_BLUE": 26,
+        "MOVE_TO_GREEN": 25,
+        "MOVE_TO_RED": 24,
+        "MOVE_TO_YELLOW": 21,
+        "MOVE_TO_PURPLE": 20
+      }
+    },
+    {
+      "level": "medium",
+      "episodes": 80,
+      "success_rate": 1.0,
+      "avg_return": 20.327499999999997,
+      "avg_steps": 5.3875,
+      "nav_mode_seen": 0,
+      "mid_task_changes": 1,
+      "failure_counts": {
+        "FAILED_SLIP": 17
+      },
+      "action_counts": {
+        "PICK": 128,
+        "CLEAR_BLOCKER": 64,
+        "PLACE_BIN_B": 57,
+        "PLACE_BIN_A": 54,
+        "MOVE_TO_YELLOW": 32,
+        "MOVE_TO_BLUE": 27,
+        "MOVE_TO_GREEN": 25,
+        "MOVE_TO_RED": 24,
+        "MOVE_TO_PURPLE": 20
+      }
+    },
+    {
+      "level": "hard",
+      "episodes": 80,
+      "success_rate": 0.2,
+      "avg_return": -23.94,
+      "avg_steps": 17.375,
+      "nav_mode_seen": 80,
+      "mid_task_changes": 20,
+      "failure_counts": {
+        "FAILED_EMPTY": 795,
+        "FAILED_SLIP": 14
+      },
+      "action_counts": {
+        "PICK": 897,
+        "SCAN_SCENE": 138,
+        "MOVE_SOUTH": 79,
+        "MOVE_WEST": 68,
+        "CLEAR_BLOCKER": 67,
+        "PLACE_BIN_A": 60,
+        "MOVE_EAST": 53,
+        "PLACE_BIN_B": 28
+      }
+    }
+  ],
+  "story": {
+    "novelty_signals": {
+      "dynamic_constraints_present": true,
+      "navigation_mode_present": true,
+      "failure_mode_coverage": [
+        "FAILED_EMPTY",
+        "FAILED_SLIP"
+      ],
+      "action_diversity": {
+        "easy": 9,
+        "medium": 9,
+        "hard": 8
+      }
+    },
+    "robustness_signals": {
+      "oracle_success_rates": {
+        "easy": 1.0,
+        "medium": 1.0,
+        "hard": 0.2
+      },
+      "avg_steps": {
+        "easy": 5.08,
+        "medium": 5.39,
+        "hard": 17.38
+      },
+      "disturbance_rates": {
+        "easy": {
+          "failed_slip": 0,
+          "failed_empty": 0
+        },
+        "medium": {
+          "failed_slip": 17,
+          "failed_empty": 0
+        },
+        "hard": {
+          "failed_slip": 14,
+          "failed_empty": 795
+        }
+      }
+    }
+  }
+}

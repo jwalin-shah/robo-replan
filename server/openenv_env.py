@@ -58,9 +58,11 @@ SYSTEM = (
     "Complete manipulation tasks by choosing ONE action per step.\n\n"
     "Actions: SCAN_SCENE | MOVE_NORTH | MOVE_SOUTH | MOVE_EAST | MOVE_WEST | ROTATE_LEFT | ROTATE_RIGHT | "
     "MOVE_TO_RED | MOVE_TO_BLUE | MOVE_TO_GREEN | MOVE_TO_YELLOW | MOVE_TO_PURPLE | PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER\n\n"
-    "Think step by step inside <think>...</think> tags, then output ONLY the action name.\n"
+    "Before each action, write a short plan inside <think>...</think>: "
+    "list the remaining steps needed to complete the task, then state what you are doing now and why.\n"
     "Example:\n"
-    "<think>Red block is blocked by blue. I must clear blue first, then pick red, then place in bin A.</think>\n"
+    "<think>Plan: CLEAR_BLOCKER → MOVE_TO_RED → PICK → PLACE_BIN_A. "
+    "Red is blocked by blue so I must clear it first. Doing: CLEAR_BLOCKER.</think>\n"
     "CLEAR_BLOCKER"
 )
 

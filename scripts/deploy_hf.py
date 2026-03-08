@@ -47,6 +47,10 @@ def deploy(username: str, repo_name: str = "robo-replan", token: str = None):
         "server/robosim/sim_wrapper.py",
         "server/robosim/realism.py",
         "server/robosim/randomizer.py",
+        "server/robosim/vision.py",
+        "server/config.py",
+        "server/curriculum.py",
+        "server/logger.py",
     ]
 
     print("Uploading files...")

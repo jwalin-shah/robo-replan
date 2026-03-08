@@ -34,7 +34,10 @@
     .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
     .tag { background: #2a2a36; border-radius: 4px; padding: 1px 6px; font-size: 0.68rem; color: #aaa; }
     .tag.blocked { background: #3a1a1a; color: #e06060; }
+    .tag.hidden  { background: #2a2a1a; color: #b8a060; }
     .tag.held    { background: #1a3a1a; color: #60e090; }
+    .reasoning-box { background: #1a1a2e; border-left: 3px solid #4a6fa5; border-radius: 4px; padding: 8px 10px; font-size: 0.75rem; color: #8ab4d4; line-height: 1.5; font-style: italic; margin-bottom: 6px; white-space: pre-wrap; word-break: break-word; }
+    .action-box    { background: #1a2e1a; border-left: 3px solid #4a8a4a; border-radius: 4px; padding: 6px 10px; font-size: 0.8rem; color: #7ed87e; font-family: monospace; font-weight: bold; letter-spacing: 0.05em; }
     .log { display: flex; flex-direction: column; gap: 3px; max-height: 180px; overflow-y: auto; }
     .log-row { font-size: 0.73rem; display: flex; gap: 8px; }
     .log-row .sn  { color: #555; width: 26px; flex-shrink: 0; }
@@ -136,7 +139,7 @@
       <div class="list-items" id="diag"></div>
     </div>
     <div>
-      <h2>Raw Model Output</h2>
+      <h2>Model Reasoning</h2>
       <div class="list-items" id="raw-model"><div class="none">none</div></div>
     </div>
 
@@ -695,6 +698,8 @@ let playing  = false;
 let playTimer = null;
 let modelBusy = false;
 let lastModelRaw = '';
+let lastModelReasoning = '';
+let lastModelAction = '';
 let lastStepInfo = {};
 let recentActions = [];
 let recentRewards = [];
@@ -810,11 +815,18 @@ function updateUI(obs, reward, done) {
   bar.style.width = (norm*100)+'%';
   bar.style.background = totalReward >= 0 ? '#4a8a4a' : '#8a3a3a';
 
-  // objects
+  // objects — distinguish physically blocked (has a blocker object) from hidden (perception noise)
+  const blockedByMap = {};
+  for (const o of obs.visibleObjects) {
+    if (o.blocking) blockedByMap[o.blocking] = o.name;
+  }
   document.getElementById('obj-list').innerHTML = obs.visibleObjects.map(o => {
     const col = COLORS[o.name] || '#aaa';
     const tags = [];
-    if (!o.reachable && !o.inBin) tags.push('<span class="tag blocked">blocked</span>');
+    if (!o.reachable && !o.inBin) {
+      if (blockedByMap[o.name]) tags.push('<span class="tag blocked">blocked</span>');
+      else tags.push('<span class="tag hidden">hidden</span>');
+    }
     if (o.name === obs.holding)   tags.push('<span class="tag held">held</span>');
     if (o.inBin) tags.push(`<span class="tag">in bin ${o.inBin}</span>`);
     return `<div class="obj-row"><div class="dot" style="background:${col}"></div><span>${o.name}</span>${tags.join('')}</div>`;
@@ -870,9 +882,17 @@ function updateUI(obs, reward, done) {
     <div class="item con">Loop risk: ${loopRisk}</div>
   `;
   const rawEl = document.getElementById('raw-model');
-  rawEl.innerHTML = lastModelRaw
-    ? `<div class="item con">${lastModelRaw.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`
-    : '<div class="none">none</div>';
+  if (lastModelReasoning || lastModelAction) {
+    const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    rawEl.innerHTML =
+      (lastModelReasoning ? `<div class="reasoning-box">💭 ${esc(lastModelReasoning)}</div>` : '') +
+      (lastModelAction ? `<div class="action-box">▶ ${esc(lastModelAction)}</div>` : '');
+  } else if (lastModelRaw) {
+    const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    rawEl.innerHTML = `<div class="item con">${esc(lastModelRaw)}</div>`;
+  } else {
+    rawEl.innerHTML = '<div class="none">none</div>';
+  }
 
   renderManualButtons(obs.validActions);
 
@@ -904,6 +924,8 @@ async function resetEpAsync() {
   totalReward = 0; stepCount = 0; episodeCount++;
   recentActions = [];
   recentRewards = [];
+  lastModelRaw = ''; lastModelReasoning = ''; lastModelAction = '';
+  document.getElementById('raw-model').innerHTML = '<div class="none">none</div>';
   document.getElementById('log').innerHTML = '';
   try {
     const r = await apiReset();
@@ -1020,7 +1042,14 @@ async function modelStep() {
     const rawAction = data.raw_action || 'n/a';
     const chosen = data.action || 'n/a';
     const valid = (data.valid_actions_used || []).join(', ');
-    lastModelRaw = `${raw}\n[raw_action=${rawAction}] [chosen=${chosen}] [valid=${valid || 'n/a'}]${data.error ? ` [error=${data.error}]` : ''}`;
+    // Use structured reasoning field if available, otherwise parse <think> tags
+    lastModelReasoning = data.reasoning || (() => {
+      const m = raw.match(/<think>([\s\S]*?)<\/think>/i);
+      return m ? m[1].trim() : '';
+    })();
+    lastModelAction = chosen;
+    lastModelRaw = raw;
+    if (data.error) lastModelRaw += ` [error=${data.error}]`;
     let action = data.action || 'SCAN_SCENE';
     await manualStepAsync(action);
   } catch (e) {
