@@ -984,10 +984,17 @@ async function modelStep() {
     const resp = await fetch('/demo/policy_action', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: buildPolicyPrompt(currentObs) }),
+      body: JSON.stringify({
+        prompt: buildPolicyPrompt(currentObs),
+        valid_actions: currentObs.validActions || [],
+      }),
     });
     const data = await resp.json();
-    lastModelRaw = data.raw_output || '';
+    const raw = data.raw_output || '';
+    const rawAction = data.raw_action || 'n/a';
+    const chosen = data.action || 'n/a';
+    const valid = (data.valid_actions_used || []).join(', ');
+    lastModelRaw = `${raw}\n[raw_action=${rawAction}] [chosen=${chosen}] [valid=${valid || 'n/a'}]${data.error ? ` [error=${data.error}]` : ''}`;
     let action = data.action || 'SCAN_SCENE';
     await manualStepAsync(action);
   } catch (e) {

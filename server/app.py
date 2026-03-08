@@ -116,6 +116,7 @@ def _get_policy_pipe():
 
 class PolicyActionRequest(BaseModel):
     prompt: str
+    valid_actions: list[str] = []
 
 @app.post("/demo/reset")
 def demo_reset(difficulty: str = "easy"):
@@ -177,14 +178,20 @@ def demo_policy_action(req: PolicyActionRequest):
             top_p=0.9,
             repetition_penalty=1.05,
         )[0]["generated_text"]
-        action = _extract_action(out)
-        valid = _parse_valid_actions_from_prompt(req.prompt)
+        raw_action = _extract_action(out)
+        action = raw_action
+        valid = [a for a in req.valid_actions if a in _VALID_ACTIONS] or _parse_valid_actions_from_prompt(req.prompt)
         if valid and action not in valid:
             action = _fallback_action(valid)
         # Avoid no-op scan loops when other valid actions exist.
         if valid and action == "SCAN_SCENE" and any(v != "SCAN_SCENE" for v in valid):
             action = _fallback_action([v for v in valid if v != "SCAN_SCENE"])
-        return {"action": action, "raw_output": out}
+        return {
+            "action": action,
+            "raw_output": out,
+            "raw_action": raw_action,
+            "valid_actions_used": valid,
+        }
     except Exception as exc:
         # Fail soft so the UI can still run with manual/scripted controls.
         return {"action": "SCAN_SCENE", "error": str(exc)}
