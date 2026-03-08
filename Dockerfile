@@ -9,7 +9,12 @@ RUN pip install --no-cache-dir \
     uvicorn \
     pydantic \
     numpy \
-    "openenv-core==0.2.1"
+    "openenv-core==0.2.1" \
+    "transformers>=4.40.0" \
+    "torch>=2.2.0" \
+    "accelerate>=0.30.0" \
+    "sentencepiece>=0.2.0" \
+    "safetensors>=0.4.0"
 
 # Copy source
 COPY server/ server/

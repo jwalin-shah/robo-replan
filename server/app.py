@@ -194,4 +194,6 @@ def demo_policy_action(req: PolicyActionRequest):
         }
     except Exception as exc:
         # Fail soft so the UI can still run with manual/scripted controls.
-        return {"action": "SCAN_SCENE", "error": str(exc)}
+        valid = [a for a in req.valid_actions if a in _VALID_ACTIONS] or _parse_valid_actions_from_prompt(req.prompt)
+        action = _fallback_action([v for v in valid if v != "SCAN_SCENE"]) if valid else "SCAN_SCENE"
+        return {"action": action, "error": str(exc), "valid_actions_used": valid}
