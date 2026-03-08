@@ -75,6 +75,7 @@ METRICS_JSONL = os.environ.get("METRICS_JSONL", "./logs/train_metrics.jsonl")
 TRAIN_DIFFICULTY = os.environ.get("TRAIN_DIFFICULTY", "easy").strip().lower()
 EVAL_EPISODES = int(os.environ.get("EVAL_EPISODES", "100"))
 FIXED_EVAL_SEED = int(os.environ.get("FIXED_EVAL_SEED", "1337"))
+FAST_MODE = os.environ.get("FAST_MODE", "0").lower() in ("1", "true", "yes")
 GRPO_BATCH_SIZE = int(os.environ.get("GRPO_BATCH_SIZE", "4"))
 GRPO_GRAD_ACCUM = int(os.environ.get("GRPO_GRAD_ACCUM", "4"))
 GRPO_NUM_GENERATIONS = int(os.environ.get("GRPO_NUM_GENERATIONS", "4"))
@@ -90,10 +91,30 @@ SFT_GRAD_ACCUM = int(os.environ.get("SFT_GRAD_ACCUM", "2"))
 SCAN_ORACLE_KEEP_PROB = float(os.environ.get("SCAN_ORACLE_KEEP_PROB", "0.35"))
 PICK_LOOP_PENALTY = float(os.environ.get("PICK_LOOP_PENALTY", "2.5"))
 INVALID_ACTION_BASE_PENALTY = float(os.environ.get("INVALID_ACTION_BASE_PENALTY", "4.0"))
+INVALID_REPEAT_PENALTY_SLOPE = float(os.environ.get("INVALID_REPEAT_PENALTY_SLOPE", "0.8"))
 EXCEPTION_PENALTY = float(os.environ.get("EXCEPTION_PENALTY", "10.0"))
 MOVE_NO_PROGRESS_PENALTY = float(os.environ.get("MOVE_NO_PROGRESS_PENALTY", "0.9"))
 DOMINANCE_THRESHOLD = float(os.environ.get("DOMINANCE_THRESHOLD", "0.6"))
 DOMINANCE_BASE_PENALTY = float(os.environ.get("DOMINANCE_BASE_PENALTY", "2.0"))
+USE_SIMPLE_REWARD = os.environ.get("USE_SIMPLE_REWARD", "1").lower() in ("1", "true", "yes")
+SIMPLE_STEP_PENALTY_BASE = float(os.environ.get("SIMPLE_STEP_PENALTY_BASE", "0.05"))
+SIMPLE_STEP_PENALTY_GROWTH = float(os.environ.get("SIMPLE_STEP_PENALTY_GROWTH", "0.02"))
+SIMPLE_TERMINAL_FAIL_PENALTY = float(os.environ.get("SIMPLE_TERMINAL_FAIL_PENALTY", "8.0"))
+
+if FAST_MODE:
+    # Instance-friendly defaults: larger batches and shorter GRPO rollouts.
+    if "SFT_BATCH_SIZE" not in os.environ:
+        SFT_BATCH_SIZE = 8
+    if "SFT_GRAD_ACCUM" not in os.environ:
+        SFT_GRAD_ACCUM = 1
+    if "GRPO_BATCH_SIZE" not in os.environ:
+        GRPO_BATCH_SIZE = 8
+    if "GRPO_GRAD_ACCUM" not in os.environ:
+        GRPO_GRAD_ACCUM = 1
+    if "GRPO_NUM_GENERATIONS" not in os.environ:
+        GRPO_NUM_GENERATIONS = 2
+    if "GRPO_MAX_COMPLETION_LENGTH" not in os.environ:
+        GRPO_MAX_COMPLETION_LENGTH = 4
 
 CFG_BY_NAME = {
     "easy": EnvConfig.easy,
@@ -539,17 +560,20 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
         reward_fn._stats["total"] += 1
         reward_fn._stats["action_counts"][action] = reward_fn._stats["action_counts"].get(action, 0) + 1
         try:
-            valid_actions, last_action, last_result, history, progress_pct = parse_prompt_context(prompts[i] if prompts else None)
-            if valid_actions and action not in valid_actions:
+            def invalid_repeat_penalty(action_history, current_action):
                 repeat_tail = 0
-                for h in reversed(history):
-                    if h == action:
+                for h in reversed(action_history):
+                    if h == current_action:
                         repeat_tail += 1
                     else:
                         break
-                shaped_reward = -INVALID_ACTION_BASE_PENALTY - (0.6 * min(repeat_tail, 6))
-                if action == "PICK":
-                    shaped_reward -= PICK_LOOP_PENALTY * reward_fn._stats["invalid_pick_scale"]
+                return -INVALID_ACTION_BASE_PENALTY - (
+                    INVALID_REPEAT_PENALTY_SLOPE * min(repeat_tail, 6)
+                )
+
+            valid_actions, last_action, last_result, history, progress_pct = parse_prompt_context(prompts[i] if prompts else None)
+            if valid_actions and action not in valid_actions:
+                shaped_reward = invalid_repeat_penalty(history, action)
                 rewards.append(shaped_reward)
                 reward_fn._stats["invalid"] += 1
                 batch_actions.append(action)
@@ -557,7 +581,6 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
                 batch_results.append("FAILED_INVALID")
                 batch_oracles.append(None)
                 continue
-            reward_fn._stats["valid"] += 1
 
             eval_env = TabletopPlanningEnv(config=TRAIN_CFG)
             scen = json_to_scenario(scenario[i])
@@ -593,15 +616,7 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
 
             valid_now = set(eval_env._valid_actions())
             if action not in valid_now:
-                repeat_tail = 0
-                for h in reversed(history):
-                    if h == action:
-                        repeat_tail += 1
-                    else:
-                        break
-                shaped_reward = -INVALID_ACTION_BASE_PENALTY - (0.8 * min(repeat_tail, 6))
-                if action == "PICK":
-                    shaped_reward -= PICK_LOOP_PENALTY * reward_fn._stats["invalid_pick_scale"]
+                shaped_reward = invalid_repeat_penalty(history, action)
                 rewards.append(shaped_reward)
                 reward_fn._stats["invalid"] += 1
                 batch_actions.append(action)
@@ -609,6 +624,7 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
                 batch_results.append("FAILED_INVALID")
                 batch_oracles.append(eval_env._oracle_action())
                 continue
+            reward_fn._stats["valid"] += 1
 
             pre_progress = eval_env._goal_progress()
             oracle_action = eval_env._oracle_action()
@@ -617,104 +633,112 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             post_progress = eval_env._goal_progress()
             progress_delta = max(0.0, post_progress - pre_progress)
 
-            # Discourage no-op loops like MOVE_TO_X -> MOVE_TO_X after a successful move.
-            if (
-                last_action
-                and last_result == 'SUCCESS'
-                and action == last_action
-                and action.startswith('MOVE_TO_')
-            ):
-                shaped_reward -= 0.75
+            if USE_SIMPLE_REWARD:
+                # Simple shaping: each step costs more than the previous step.
+                step_idx = int(result.info.get("step", 1))
+                shaped_reward -= SIMPLE_STEP_PENALTY_BASE + SIMPLE_STEP_PENALTY_GROWTH * max(0, step_idx - 1)
+                # Strong terminal penalty for ending without completing all goals.
+                if result.done and not eval_env._all_goals_complete():
+                    shaped_reward -= SIMPLE_TERMINAL_FAIL_PENALTY
+            else:
+                # Discourage no-op loops like MOVE_TO_X -> MOVE_TO_X after a successful move.
+                if (
+                    last_action
+                    and last_result == 'SUCCESS'
+                    and action == last_action
+                    and action.startswith('MOVE_TO_')
+                ):
+                    shaped_reward -= 0.75
 
-            # Penalize repeated failed PICK attempts to break local loops.
-            if action == 'PICK' and last_action == 'PICK' and last_result and last_result.startswith('FAILED'):
-                shaped_reward -= 1.5 * reward_fn._stats["invalid_pick_scale"]
+                # Penalize repeated failed PICK attempts to break local loops.
+                if action == 'PICK' and last_action == 'PICK' and last_result and last_result.startswith('FAILED'):
+                    shaped_reward -= 1.5 * reward_fn._stats["invalid_pick_scale"]
 
-            # Discourage no-op behavior and repeated identical actions.
-            if action == 'SCAN_SCENE':
-                scan_tail = 0
-                for h in reversed(history):
-                    if h == 'SCAN_SCENE':
-                        scan_tail += 1
+                # Discourage no-op behavior and repeated identical actions.
+                if action == 'SCAN_SCENE':
+                    scan_tail = 0
+                    for h in reversed(history):
+                        if h == 'SCAN_SCENE':
+                            scan_tail += 1
+                        else:
+                            break
+                    scan_streak = scan_tail + 1
+                    if scan_streak == 1:
+                        scan_penalty = 0.35
+                    elif scan_streak == 2:
+                        scan_penalty = 0.9
+                    elif scan_streak == 3:
+                        scan_penalty = 1.8
                     else:
-                        break
-                scan_streak = scan_tail + 1
-                if scan_streak == 1:
-                    scan_penalty = 0.35
-                elif scan_streak == 2:
-                    scan_penalty = 0.9
-                elif scan_streak == 3:
-                    scan_penalty = 1.8
-                else:
-                    scan_penalty = 3.0 + 0.5 * (scan_streak - 4)
-                shaped_reward -= scan_penalty * reward_fn._stats["scan_penalty_scale"]
-                # Repeated scanning when oracle wants progress should be heavily discouraged.
-                if oracle_action and oracle_action != 'SCAN_SCENE':
-                    shaped_reward -= 1.5 * reward_fn._stats["scan_penalty_scale"]
-                else:
-                    shaped_reward += 0.05
-            if last_action and action == last_action:
-                shaped_reward -= 0.5
+                        scan_penalty = 3.0 + 0.5 * (scan_streak - 4)
+                    shaped_reward -= scan_penalty * reward_fn._stats["scan_penalty_scale"]
+                    # Repeated scanning when oracle wants progress should be heavily discouraged.
+                    if oracle_action and oracle_action != 'SCAN_SCENE':
+                        shaped_reward -= 1.5 * reward_fn._stats["scan_penalty_scale"]
+                    else:
+                        shaped_reward += 0.05
+                if last_action and action == last_action:
+                    shaped_reward -= 0.5
 
-            if progress_delta <= 1e-6 and last_action and action == last_action:
-                repeat_tail = 0
+                if progress_delta <= 1e-6 and last_action and action == last_action:
+                    repeat_tail = 0
+                    for h in reversed(history):
+                        if h == action:
+                            repeat_tail += 1
+                        else:
+                            break
+                    shaped_reward -= (0.4 + 0.2 * min(repeat_tail, 6))
+
+                if progress_delta <= 1e-6 and len(history) >= 3 and len(set(history[-3:])) == 1:
+                    shaped_reward -= 0.9
+
+                if action == "PICK" and result.info.get("result", "").startswith("FAILED"):
+                    pick_tail = 0
+                    for h in reversed(history):
+                        if h == "PICK":
+                            pick_tail += 1
+                        else:
+                            break
+                    shaped_reward -= (1.0 + 0.5 * min(pick_tail, 6)) * reward_fn._stats["invalid_pick_scale"]
+
+                if progress_delta <= 1e-6 and progress_pct is not None and progress_pct < 0.95:
+                    shaped_reward -= 0.15
+
+                if action.startswith("MOVE_TO_") and progress_delta <= 1e-6:
+                    shaped_reward -= MOVE_NO_PROGRESS_PENALTY
+
+                # Reward oracle alignment only when oracle action is in model action space.
+                if oracle_action in ACTIONS and action == oracle_action:
+                    shaped_reward += 2.0
+                elif oracle_action in ACTIONS and action != oracle_action:
+                    shaped_reward -= 0.6
+
+                # If the policy is collapsing on one dominant action, punish choosing it
+                # when it does not match oracle guidance.
+                if (
+                    top_action
+                    and action == top_action
+                    and oracle_action in ACTIONS
+                    and action != oracle_action
+                ):
+                    shaped_reward -= 1.8 * reward_fn._stats["dominance_penalty_scale"]
+                if top_action and action == top_action and top_share > DOMINANCE_THRESHOLD:
+                    shaped_reward -= DOMINANCE_BASE_PENALTY * reward_fn._stats["dominance_penalty_scale"]
+
+                same_tail = 0
                 for h in reversed(history):
                     if h == action:
-                        repeat_tail += 1
+                        same_tail += 1
                     else:
                         break
-                shaped_reward -= (0.4 + 0.2 * min(repeat_tail, 6))
+                if same_tail >= 2:
+                    shaped_reward -= 0.8 + 0.4 * min(same_tail - 2, 6)
+                if same_tail >= 5:
+                    shaped_reward -= 6.0
 
-            if progress_delta <= 1e-6 and len(history) >= 3 and len(set(history[-3:])) == 1:
-                shaped_reward -= 0.9
-
-            if action == "PICK" and result.info.get("result", "").startswith("FAILED"):
-                pick_tail = 0
-                for h in reversed(history):
-                    if h == "PICK":
-                        pick_tail += 1
-                    else:
-                        break
-                shaped_reward -= (1.0 + 0.5 * min(pick_tail, 6)) * reward_fn._stats["invalid_pick_scale"]
-
-            if progress_delta <= 1e-6 and progress_pct is not None and progress_pct < 0.95:
-                shaped_reward -= 0.15
-
-            if action.startswith("MOVE_TO_") and progress_delta <= 1e-6:
-                shaped_reward -= MOVE_NO_PROGRESS_PENALTY
-
-            # Reward oracle alignment only when oracle action is in model action space.
-            if oracle_action in ACTIONS and action == oracle_action:
-                shaped_reward += 2.0
-            elif oracle_action in ACTIONS and action != oracle_action:
-                shaped_reward -= 0.6
-
-            # If the policy is collapsing on one dominant action, punish choosing it
-            # when it does not match oracle guidance.
-            if (
-                top_action
-                and action == top_action
-                and oracle_action in ACTIONS
-                and action != oracle_action
-            ):
-                shaped_reward -= 1.8 * reward_fn._stats["dominance_penalty_scale"]
-            if top_action and action == top_action and top_share > DOMINANCE_THRESHOLD:
-                shaped_reward -= DOMINANCE_BASE_PENALTY * reward_fn._stats["dominance_penalty_scale"]
-
-            same_tail = 0
-            for h in reversed(history):
-                if h == action:
-                    same_tail += 1
-                else:
-                    break
-            if same_tail >= 2:
-                shaped_reward -= 0.8 + 0.4 * min(same_tail - 2, 6)
-            if same_tail >= 5:
-                shaped_reward -= 6.0
-
-            # Explicitly reward actual task progress.
-            if progress_delta > 0:
-                shaped_reward += 4.0 * progress_delta
+                # Explicitly reward actual task progress.
+                if progress_delta > 0:
+                    shaped_reward += 4.0 * progress_delta
 
             rewards.append(shaped_reward)
             batch_actions.append(action)
