@@ -1,0 +1,22 @@
+# Keep image smaller and avoid copying unneeded files (Northflank / Docker)
+.git
+.gitignore
+*.env
+.env.*
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+*.egg-info
+.eggs
+dist
+build
+*.md
+!README.md
+logs/
+outputs/
+*.jsonl
+.ipynb_checkpoints
+*.ipynb
+.dockerignore

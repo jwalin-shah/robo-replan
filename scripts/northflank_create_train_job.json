@@ -1,0 +1,30 @@
+{
+  "name": "robo-replan-train",
+  "description": "GRPO training on H100 (Dockerfile.train)",
+  "billing": {
+    "deploymentPlan": "nf-gpu-hack-16-64"
+  },
+  "backoffLimit": 0,
+  "runOnSourceChange": "never",
+  "activeDeadlineSeconds": 14400,
+  "deployment": {
+    "docker": { "configType": "default" },
+    "buildpack": { "configType": "default" },
+    "storage": {
+      "ephemeralStorage": { "storageSize": 20480 },
+      "shmSize": 64
+    },
+    "vcs": {
+      "projectUrl": "https://github.com/jwalin-shah/robo-replan",
+      "projectType": "github",
+      "projectBranch": "main"
+    }
+  },
+  "buildSettings": {
+    "dockerfile": {
+      "dockerFilePath": "/Dockerfile.train",
+      "dockerWorkDir": "/"
+    }
+  },
+  "healthChecks": []
+}
