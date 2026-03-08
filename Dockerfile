@@ -20,10 +20,11 @@ RUN pip install --no-cache-dir \
 COPY server/ server/
 COPY viz_standalone.html .
 
-# HF Spaces runs on port 7860
+# HF Spaces injects PORT at runtime (default 7860)
 ENV PORT=7860
 ENV DIFFICULTY=easy
 
 EXPOSE 7860
 
-CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "7860"]
+# Use PORT from environment so the Space can bind correctly
+CMD ["sh", "-c", "uvicorn server.app:app --host 0.0.0.0 --port ${PORT:-7860}"]

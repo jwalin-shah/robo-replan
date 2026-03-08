@@ -19,7 +19,8 @@ RUN pip3 install --no-cache-dir \
     && pip3 install --no-cache-dir \
     "transformers>=4.40" "accelerate>=0.30" "datasets" "trl==0.14.0" \
     pydantic numpy "openenv-core==0.2.1" \
-    sentencepiece safetensors
+    sentencepiece safetensors \
+    "vllm>=0.10.2,<0.13" --extra-index-url https://download.pytorch.org/whl/cu121
 
 COPY server/ server/
 COPY train/ train/

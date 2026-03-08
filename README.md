@@ -4,6 +4,7 @@ emoji: 🤖
 colorFrom: blue
 colorTo: purple
 sdk: docker
+app_port: 7860
 pinned: false
 ---
 
@@ -137,6 +138,8 @@ result = env.step({"action": "CLEAR_BLOCKER", "reasoning": "blocker in the way"}
 | `POST` | `/step` | Take one action, get observation + reward |
 | `GET` | `/viz` | Interactive browser visualization |
 
+**If the Space is broken for the env:** Ensure the Space is built from this repo (same `Dockerfile` and `server/`). The app listens on `$PORT` (default 7860). Rebuild the Space (Factory → Restart) after pulling latest. For `AutoEnv.from_env("openenv-community/robo-replan")` to work, the Space must be running and expose `/health`, `/schema`, `/reset`, `/step`.
+
 ---
 
 ## Domain Randomization
@@ -173,7 +176,9 @@ Training uses Group Relative Policy Optimization (GRPO) — no value function, j
 
 ![Training Results](training_results.png)
 
-Results from `train/colab_train.ipynb`.
+Results from `train/colab_train.ipynb`. The notebook also plots **GRPO reward over time** (batch mean + smoothed curve) and saves `grpo_reward_over_time.png`.
+
+**How to run the notebook (Colab):** Open [train/colab_train.ipynb](https://colab.research.google.com/github/jwalin-shah/robo-replan/blob/main/train/colab_train.ipynb) in Colab → **Runtime → Change runtime type → T4 GPU** → Run all cells (~40–60 min). Quick test: run only cells 1–2 to verify setup (clone, env import).
 
 ### Reward shaping for training
 
@@ -208,7 +213,7 @@ Training weights differ from eval to reduce reward hacking:
 |---|---|---|
 | **Environment Innovation** | 40% | Novel mid-task replanning challenge: instruction changes at steps 6 and 12, grasp failures, partial observability, deadlines, blockers, and ordering constraints. Four domain skins (default, pharmacy, warehouse, lab) ground the same mechanics in PS 3.1 "Professional Tasks" scenarios. Three-level curriculum with domain randomization ensures the model cannot memorize layouts. |
 | **Storytelling** | 30% | Clear before/after: random model loops on SCAN_SCENE and times out; trained model reasons "red block is blocked → CLEAR_BLOCKER → PICK → PLACE_BIN_A." The `/viz` UI shows instruction, scene state, mid-task change banner (orange flash), and full reasoning trace in real time. Switch to Pharmacy pack for a professional-tasks narrative. |
-| **Training script showing improvement** | 20% | `train/colab_train.ipynb` runs SFT + GRPO end-to-end on a free T4, prints before/after success rates, and saves `training_results.png`. The GRPO reward function correctly replays action history to evaluate each completion at the exact env state shown in its prompt. |
+| **Training script showing improvement** | 20% | `train/colab_train.ipynb` runs SFT + GRPO end-to-end on a free T4, prints before/after success rates, saves `training_results.png` and `grpo_reward_over_time.png` (reward curve over training). The GRPO reward function correctly replays action history to evaluate each completion at the exact env state shown in its prompt. |
 | **Reward and training pipeline** | 10% | Reward table above; reasoning bonus (0–1.5) incentivises chain-of-thought. GRPO reward is computed by stepping the live env so improvement in reasoning directly improves task completion. Training weights amplify task completion (+25) and penalise semantic errors (-6 wrong bin, -6 constraint violation) to prevent partial-credit gaming. |
 
 **Demo checklist for judges**
@@ -216,5 +221,5 @@ Training weights differ from eval to reduce reward hacking:
 1. Open the Space → pick **Pharmacy** pack → set difficulty to **Medium** → click **Reset**
 2. Click **▶ Run Agent** — watch the untrained model struggle (scan loops, missed blockers)
 3. Reset → click **🎯 Run Oracle** — see optimal reasoning trace in the `💭` box
-4. Point to `training_results.png` or Colab output for before/after numbers
+4. Point to `training_results.png` (and `grpo_reward_over_time.png`) or Colab output for before/after numbers
 5. Story: "RoboReplan trains LLMs to replan — clear blockers, recover from grasp failures, and adapt when the instruction changes mid-task."

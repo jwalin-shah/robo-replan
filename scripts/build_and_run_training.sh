@@ -52,6 +52,11 @@ if $WAIT_FOR_BUILD; then
   done
 fi
 
+echo "Aborting any active runs (close runtimes before new job)..."
+bash "$(dirname "$0")/northflank_abort_running_runs.sh" || true
+echo "Waiting 5s for runtimes to close..."
+sleep 5
+
 echo "Triggering run..."
 RUN_JSON=$(curl -s -X POST "https://api.northflank.com/v1/projects/$PROJECT/jobs/$JOB/runs" \
   -H "Authorization: Bearer $NORTHFLANK_TOKEN" \

@@ -20,7 +20,12 @@ fi
 PROJECT_ID="${NORTHFLANK_PROJECT_ID:-hackathon}"
 JOB_ID="${NORTHFLANK_TRAIN_JOB_ID:-robo-replan-train}"
 
-echo "Starting training job run: $JOB_ID (project: $PROJECT_ID)"
+echo "Aborting any active runs for $JOB_ID..."
+bash "$(dirname "$0")/northflank_abort_running_runs.sh" || true
+echo "Waiting 5s for runtimes to close..."
+sleep 5
+
+echo "Starting new training job run: $JOB_ID (project: $PROJECT_ID)"
 RES=$(curl -s -X POST "https://api.northflank.com/v1/projects/$PROJECT_ID/jobs/$JOB_ID/runs" \
   -H "Authorization: Bearer $NORTHFLANK_TOKEN" \
   -H "Content-Type: application/json" \
