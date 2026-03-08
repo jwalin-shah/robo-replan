@@ -12,11 +12,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Layer order for cache: deps first (change rarely), then code (change often)
+# Use torch 2.5 + trl 0.14 to avoid FSDPModule (needs 2.6) and build issues
 COPY pyproject.toml .
 RUN pip3 install --no-cache-dir \
-    "torch>=2.6.0" --index-url https://download.pytorch.org/whl/cu121 \
+    "torch>=2.2.0,<2.6" --index-url https://download.pytorch.org/whl/cu121 \
     && pip3 install --no-cache-dir \
-    "transformers>=4.40" "accelerate>=0.30" "datasets" "trl>=0.15" \
+    "transformers>=4.40" "accelerate>=0.30" "datasets" "trl>=0.14,<0.15" \
     pydantic numpy "openenv-core==0.2.1" \
     sentencepiece safetensors
 
