@@ -23,6 +23,7 @@ class RewardWeights:
 
     # Penalties
     wrong_bin: float = -3.0
+    wrong_pick: float = -1.0
     first_failure: float = -1.0
     repeated_failure: float = -2.5     # same action:result seen before
     constraint_violation: float = -4.0

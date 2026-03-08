@@ -197,6 +197,7 @@ class TabletopPlanningEnv:
                 and not self._done):
             self._apply_mid_task_change()
 
+        pre_holding = self.sim.get_state().holding
         valid_now = self._valid_actions()
         invalid_reason = None
         if action not in valid_now:
@@ -223,7 +224,7 @@ class TabletopPlanningEnv:
         self._last_result = result
 
         self._steps += 1
-        reward = self._compute_reward(action, result)
+        reward = self._compute_reward(action, result, pre_holding=pre_holding)
         reward += self._reasoning_bonus(reasoning, action, result)
         self._cumulative_reward += reward
         self._update_planning_state(action, result)
@@ -360,7 +361,7 @@ class TabletopPlanningEnv:
 
         return min(bonus, 0.5)  # cap at 0.5 so it never dominates task reward
 
-    def _compute_reward(self, action: str, result: str) -> float:
+    def _compute_reward(self, action: str, result: str, pre_holding: Optional[str] = None) -> float:
         w = self.cfg.reward
         r = w.step_cost
 
@@ -378,15 +379,22 @@ class TabletopPlanningEnv:
         if action == "CLEAR_BLOCKER":
             r += w.blocker_cleared
         if action == "PICK":
-            r += w.successful_pick
+            held = self.sim.get_state().holding
+            # Reward only picks that move a required-yet-unfinished target.
+            if held and held in self._required_placements:
+                target_bin = self._required_placements[held]
+                obj = self.sim.get_state().objects.get(held)
+                already_done = bool(obj and obj.in_bin == target_bin)
+                if not already_done:
+                    r += w.successful_pick
+                else:
+                    r += w.wrong_pick
+            else:
+                r += w.wrong_pick
         if action in ("PLACE_BIN_A", "PLACE_BIN_B"):
             bin_name = "A" if action == "PLACE_BIN_A" else "B"
-            state = self.sim.get_state()
-            correct = any(
-                state.objects[n].in_bin == bin_name
-                for n, req in self._required_placements.items()
-                if req == bin_name and n in state.objects
-            )
+            placed_obj = pre_holding
+            correct = bool(placed_obj and self._required_placements.get(placed_obj) == bin_name)
             r += w.correct_placement if correct else w.wrong_bin
             if not correct and self._active_constraints:
                 r += w.constraint_violation  # extra hit for constraint violation
