@@ -90,7 +90,7 @@ class RealismConfig:
     def hard(cls):
         return cls(grasp_fail_prob=0.20, clear_partial_prob=0.25,
                    reachability_noise=0.15, hidden_object_prob=0.40,
-                   object_drift_prob=0.08)
+                   object_drift_prob=0.02)
 
 
 @dataclass

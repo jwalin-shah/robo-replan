@@ -280,7 +280,7 @@ class SimWrapper:
             ))
             for _, obj in candidates:
                 dist = np.linalg.norm(s.gripper_pos[:2] - obj.pos[:2])
-                if dist < 0.15 or self._is_adjacent(obj):
+                if dist < 0.15:
                     obj.is_held = True
                     s.holding = obj.name
                     s.gripper_open = False
@@ -303,8 +303,6 @@ class SimWrapper:
         elif action == "CLEAR_BLOCKER":
             for obj in s.objects.values():
                 if obj.blocking is not None and obj.reachable:
-                    if not self._is_adjacent(obj):
-                        continue
                     blocked_name = obj.blocking
                     obj.blocking = None
                     obj.pos = obj.pos + np.array([0.28, 0.1, 0])

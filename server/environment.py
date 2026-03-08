@@ -25,6 +25,8 @@ class TabletopPlanningEnv:
         self._episode_id = 0
         self._cumulative_reward = 0.0
         self._action_history: list[str] = []
+        self._last_action: Optional[str] = None
+        self._last_result: Optional[str] = None
         self._mid_task_changed = False
         self._reset_internal()
 
@@ -99,6 +101,8 @@ class TabletopPlanningEnv:
 
         self._apply_world_drift()
         self._action_history.append(action)
+        self._last_action = action
+        self._last_result = result
 
         self._steps += 1
         reward = self._compute_reward(action, result)
@@ -169,6 +173,8 @@ class TabletopPlanningEnv:
         self._mid_task_changed = False
         self._cumulative_reward = 0.0
         self._action_history = []
+        self._last_action = None
+        self._last_result = None
         self._completed_subgoals: list[str] = []
         self._known_failures: list[str] = []
         self._active_constraints: list[str] = ([scenario_cfg.constraint]
@@ -407,7 +413,8 @@ class TabletopPlanningEnv:
         state = self.sim.get_state()
         failures = set(self._known_failures)
         completed = set(self._completed_subgoals)
-        last_action = self._action_history[-1] if self._action_history else None
+        last_action = self._last_action
+        last_result = self._last_result
 
         def can_clear_now() -> bool:
             for obj in state.objects.values():
@@ -418,8 +425,14 @@ class TabletopPlanningEnv:
                 return True
             return False
 
+        def blocker_for_target(target_name: str) -> Optional[str]:
+            for obj in state.objects.values():
+                if obj.blocking == target_name and obj.reachable and obj.in_bin is None:
+                    return obj.name
+            return None
+
         # Just moved to something → pick it
-        if last_action and last_action.startswith("MOVE_TO"):
+        if last_action and last_action.startswith("MOVE_TO") and last_result == "SUCCESS":
             return "PICK"
 
         # Holding → place correctly
@@ -452,7 +465,18 @@ class TabletopPlanningEnv:
                         return self._nav_step_toward(target)
                 color = obj_name.replace("_block", "").upper()
                 return f"MOVE_TO_{color}"
-            return "CLEAR_BLOCKER"
+            blocker = blocker_for_target(obj_name)
+            if blocker is not None:
+                if self._nav_enabled():
+                    if self._is_adjacent_to(blocker):
+                        return "CLEAR_BLOCKER"
+                    blocker_cell = self._object_cell(blocker)
+                    if blocker_cell is not None:
+                        return self._nav_step_toward(blocker_cell)
+                return "CLEAR_BLOCKER"
+            if can_clear_now():
+                return "CLEAR_BLOCKER"
+            return "SCAN_SCENE"
 
         return "SCAN_SCENE"
 
