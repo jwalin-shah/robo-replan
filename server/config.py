@@ -38,7 +38,7 @@ class RewardWeights:
 class ObsConfig:
     include_valid_actions: bool = True   # which actions make sense right now
     include_goal_progress: float = True  # 0.0–1.0 fraction of goals done
-    include_action_history: int = 5      # last N actions in obs (0 = none)
+    include_action_history: int = 10     # last N actions in obs (0 = none)
     include_oracle_hint: bool = False    # scripted policy action (teaching signal)
     include_distance_to_goal: bool = True
     include_hidden_traits: bool = True

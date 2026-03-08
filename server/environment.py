@@ -200,6 +200,12 @@ class TabletopPlanningEnv:
             self._changes_applied.add(self._steps)
 
         pre_holding = self.sim.get_state().holding
+        # Snapshot reachability BEFORE execution so reasoning bonus can check the
+        # pre-action state (e.g. "blue is blocking red" is true before CLEAR_BLOCKER fires).
+        pre_state_snapshot = {
+            name: {"reachable": obj.reachable, "blocking": obj.blocking}
+            for name, obj in self.sim.get_state().objects.items()
+        }
         valid_now = self._valid_actions()
         invalid_reason = None
         if action not in valid_now:
@@ -245,8 +251,10 @@ class TabletopPlanningEnv:
         self._last_result = result
 
         self._steps += 1
-        reward = self._compute_reward(action, result, pre_holding=pre_holding)
-        reward += self._reasoning_bonus(reasoning, action, result)
+        reward = self._compute_reward(action, result, pre_holding=pre_holding,
+                                      pre_state_snapshot=pre_state_snapshot)
+        reward += self._reasoning_bonus(reasoning, action, result,
+                                        pre_state_snapshot=pre_state_snapshot)
         self._cumulative_reward += reward
         self._update_planning_state(action, result)
 
@@ -342,24 +350,37 @@ class TabletopPlanningEnv:
 
     # ── Reward ──────────────────────────────────────────────────────────
 
-    def _reasoning_bonus(self, reasoning: str, action: str, result: str) -> float:
+    def _reasoning_bonus(self, reasoning: str, action: str, result: str,
+                         pre_state_snapshot: Optional[dict] = None) -> float:
         """
         Bonus for reasoning that mentions relevant objects, constraints, and plans.
 
+        Uses pre-action state snapshot so CLEAR_BLOCKER reasoning ("X is blocking Y")
+        is rewarded correctly even though the blocker is already gone post-execution.
+
         The cap scales with reasoning length — longer, more detailed chain-of-thought
         can earn proportionally more reward (up to a hard ceiling of 1.5).
-        This means frontier models that reason verbosely about their plan are rewarded
-        more than models that output terse one-word justifications.
         """
         if not reasoning or len(reasoning) < 10:
             return 0.0
         bonus = 0.0
         r = reasoning.lower()
-        state = self.sim.get_state()
+
+        # Use pre-action state for blocked-object checks so CLEAR_BLOCKER reasoning
+        # ("blue is blocking red") is rewarded even though the blocker is now cleared.
+        blocked_before = set()
+        if pre_state_snapshot:
+            for name, snap in pre_state_snapshot.items():
+                if not snap["reachable"]:
+                    blocked_before.add(name.replace("_block", "").lower())
+        else:
+            for obj in self.sim.get_state().objects.values():
+                if not obj.reachable:
+                    blocked_before.add(obj.name.replace("_block", "").lower())
 
         # Mentions blocked objects correctly
-        for obj in state.objects.values():
-            if not obj.reachable and obj.name.replace("_block", "") in r:
+        for color in blocked_before:
+            if color in r:
                 bonus += 0.1
 
         # Mentions the target object and correct bin
@@ -396,7 +417,8 @@ class TabletopPlanningEnv:
         length_scale = min(1.5, 0.5 + 0.1 * (len(reasoning) // 50))
         return min(bonus, length_scale)
 
-    def _compute_reward(self, action: str, result: str, pre_holding: Optional[str] = None) -> float:
+    def _compute_reward(self, action: str, result: str, pre_holding: Optional[str] = None,
+                        pre_state_snapshot: Optional[dict] = None) -> float:
         w = self.cfg.reward
         r = w.step_cost
 
@@ -441,11 +463,24 @@ class TabletopPlanningEnv:
         if action == "SCAN_SCENE":
             if not self._scanned:
                 r += w.useful_scan  # first scan only
-            # Penalize avoidable scans when actionable moves exist.
-            valid_now = self._valid_actions()
-            if any(a != "SCAN_SCENE" for a in valid_now):
-                r += w.useless_action
-            # Penalize scan loops with increasing severity.
+            # Penalize avoidable scans — but NOT if scanning is currently needed
+            # to reveal a required hidden trait (fragile/heavy) before picking.
+            scan_is_needed = False
+            if getattr(self.cfg.task, 'require_scan_for_traits', False):
+                hidden = getattr(self._scenario_cfg, 'hidden_traits', {}) or {}
+                state = self.sim.get_state()
+                for obj_name in self._required_placements:
+                    obj = state.objects.get(obj_name)
+                    if (obj and obj.reachable and obj.in_bin is None
+                            and obj_name in hidden
+                            and obj_name not in self._revealed_traits):
+                        scan_is_needed = True
+                        break
+            if not scan_is_needed:
+                valid_now = self._valid_actions()
+                if any(a != "SCAN_SCENE" for a in valid_now):
+                    r += w.useless_action
+            # Penalize scan loops with increasing severity regardless.
             streak = 0
             for a in reversed(self._action_history):
                 if a == "SCAN_SCENE":
@@ -466,6 +501,9 @@ class TabletopPlanningEnv:
             steps_saved = self.cfg.task.max_steps - self._steps
             r += w.efficiency_bonus_max * (steps_saved / self.cfg.task.max_steps)
             self._done = True
+        elif self._steps >= self.cfg.task.max_steps:
+            # Timeout: explicit penalty so the model learns completing > timing out.
+            r += w.timeout_failure
 
         # Deadline pressure: penalize each overdue unfinished target.
         for obj_name, remaining in self._deadline_status().items():
