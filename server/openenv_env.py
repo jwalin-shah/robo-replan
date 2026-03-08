@@ -56,8 +56,9 @@ class RoboState(RoboObservation):
 SYSTEM = (
     "You are a robot planning agent on a tabletop. "
     "Complete manipulation tasks by choosing ONE action per step.\n\n"
-    "Actions: SCAN_SCENE | MOVE_NORTH | MOVE_SOUTH | MOVE_EAST | MOVE_WEST | ROTATE_LEFT | ROTATE_RIGHT | "
-    "MOVE_TO_RED | MOVE_TO_BLUE | MOVE_TO_GREEN | MOVE_TO_YELLOW | MOVE_TO_PURPLE | PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER\n\n"
+    "Actions: SCAN_SCENE | MOVE_TO_RED | MOVE_TO_BLUE | MOVE_TO_GREEN | MOVE_TO_YELLOW | MOVE_TO_PURPLE | "
+    "PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER | "
+    "MOVE_NORTH | MOVE_SOUTH | MOVE_EAST | MOVE_WEST | ROTATE_LEFT | ROTATE_RIGHT (nav mode only)\n\n"
     "Before each action, write a short plan inside <think>...</think>: "
     "list the remaining steps needed to complete the task, then state what you are doing now and why.\n"
     "Example:\n"
@@ -72,19 +73,17 @@ def _build_prompt(obs) -> str:
         f"{o['name']}({'reachable' if o['reachable'] else 'BLOCKED'})"
         for o in obs.visible_objects
     )
-    history = " → ".join(obs.action_history[-5:]) or "none"
+    history = " -> ".join(obs.action_history[-10:]) or "none"
     failures = "; ".join(obs.known_failures) or "none"
     subgoals = "; ".join(obs.completed_subgoals) or "none yet"
-    constraints = "; ".join(obs.active_constraints) or "none"
     valid = ", ".join(obs.valid_actions) if obs.valid_actions else "any"
-    preconditions = "; ".join(f"{k}:{v}" for k, v in (obs.action_preconditions or {}).items()) or "n/a"
     progress = f"{obs.goal_progress:.0%}" if obs.goal_progress is not None else "?"
     nav_line = None
     if obs.nav_mode:
         nav_line = (
-            f"Navigation: gripper_cell={obs.gripper_cell or '?'} "
+            f"Navigation: gripper={obs.gripper_cell or '?'} "
             f"facing={obs.gripper_facing or '?'} "
-            f"next_target_cell={obs.next_target_cell or '?'}"
+            f"next_target={obs.next_target_cell or '?'}"
         )
 
     lines = [
@@ -93,17 +92,13 @@ def _build_prompt(obs) -> str:
         f"Instruction: {obs.instruction}",
         f"Scene: {objects}",
         f"Holding: {obs.holding or 'nothing'}",
-        f"Goal progress: {progress}  Goals remaining: {obs.goals_remaining}",
+        f"Progress: {progress}  Remaining: {obs.goals_remaining}",
         *( [nav_line] if nav_line else [] ),
         f"Completed: {subgoals}",
         f"Failures: {failures}",
-        f"Constraints: {constraints}",
-        f"Action history: {history}",
-        f"Last step: {obs.last_action or 'none'} → {obs.last_result or 'n/a'}",
-        f"Valid actions now: {valid}",
-        f"Action preconditions: {preconditions}",
-        f"Distance to next goal: {obs.distance_to_next_goal if obs.distance_to_next_goal is not None else 'n/a'}",
-        f"Deadlines: {obs.deadline_status or {}}",
+        f"History: {history}",
+        f"Last: {obs.last_action or 'none'} -> {obs.last_result or 'n/a'}",
+        f"Valid now: {valid}",
         f"Steps left: {obs.steps_remaining}",
         "",
         "Next action:",

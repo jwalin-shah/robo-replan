@@ -96,7 +96,7 @@ EXCEPTION_PENALTY = float(os.environ.get("EXCEPTION_PENALTY", "10.0"))
 MOVE_NO_PROGRESS_PENALTY = float(os.environ.get("MOVE_NO_PROGRESS_PENALTY", "0.9"))
 DOMINANCE_THRESHOLD = float(os.environ.get("DOMINANCE_THRESHOLD", "0.6"))
 DOMINANCE_BASE_PENALTY = float(os.environ.get("DOMINANCE_BASE_PENALTY", "2.0"))
-USE_SIMPLE_REWARD = os.environ.get("USE_SIMPLE_REWARD", "1").lower() in ("1", "true", "yes")
+USE_SIMPLE_REWARD = os.environ.get("USE_SIMPLE_REWARD", "0").lower() in ("1", "true", "yes")
 SIMPLE_STEP_PENALTY_BASE = float(os.environ.get("SIMPLE_STEP_PENALTY_BASE", "0.05"))
 SIMPLE_STEP_PENALTY_GROWTH = float(os.environ.get("SIMPLE_STEP_PENALTY_GROWTH", "0.02"))
 SIMPLE_TERMINAL_FAIL_PENALTY = float(os.environ.get("SIMPLE_TERMINAL_FAIL_PENALTY", "8.0"))
@@ -162,7 +162,7 @@ def obs_to_user_msg(obs):
     valid    = ', '.join(obs.valid_actions) if obs.valid_actions else 'any'
     failures = '; '.join(obs.known_failures) or 'none'
     subgoals = '; '.join(obs.completed_subgoals) or 'none yet'
-    history  = ' -> '.join(obs.action_history[-5:]) or 'none'
+    history  = ' -> '.join(obs.action_history[-10:]) or 'none'
     nav_line = ""
     if getattr(obs, 'nav_mode', False):
         nav_line = (
@@ -900,6 +900,7 @@ grpo_config = GRPOConfig(
     push_to_hub=False,
     report_to='none',
     bf16=True,
+    use_vllm=False,  # use HF generation; vllm still required to be installed for TRL import
 )
 
 model.warnings_issued = {}  # required by this TRL version
