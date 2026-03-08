@@ -614,12 +614,13 @@ class TabletopPlanningEnv:
             if has_pick:
                 valid.append("PICK")
 
-        for obj in state.objects.values():
-            if not (obj.blocking and obj.reachable):
-                continue
-            if self._nav_enabled() and not self._is_adjacent_to(obj.name):
-                continue
-            valid.append("CLEAR_BLOCKER")
+        if not state.holding:  # can't clear a blocker while holding something
+            for obj in state.objects.values():
+                if not (obj.blocking and obj.reachable):
+                    continue
+                if self._nav_enabled() and not self._is_adjacent_to(obj.name):
+                    continue
+                valid.append("CLEAR_BLOCKER")
             break
 
         return valid
