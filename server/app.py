@@ -148,16 +148,28 @@ def _smart_fallback_action(valid: list[str], prompt: str) -> str:
 def _get_policy_pipe():
     global _policy_pipe
     if _policy_pipe is None:
+        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
         tokenizer = AutoTokenizer.from_pretrained(_POLICY_MODEL)
         tokenizer.padding_side = "left"
         tokenizer.pad_token = tokenizer.eos_token
-        model = AutoModelForCausalLM.from_pretrained(_POLICY_MODEL, dtype="auto", device_map="auto")
+
+        has_gpu = torch.cuda.is_available()
+        if has_gpu:
+            model = AutoModelForCausalLM.from_pretrained(
+                _POLICY_MODEL, torch_dtype=torch.float16, device_map="auto",
+            )
+            pipe_kwargs = {"device_map": "auto"}
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                _POLICY_MODEL, torch_dtype=torch.float32,
+            )
+            pipe_kwargs = {"device": "cpu"}
+
         model.generation_config.pad_token_id = tokenizer.pad_token_id
-        # Avoid max_new_tokens/max_length warning spam in server logs.
         model.generation_config.max_length = None
-        _policy_pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device_map="auto")
+        _policy_pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, **pipe_kwargs)
     return _policy_pipe
 
 
