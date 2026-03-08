@@ -715,11 +715,14 @@ function drawSideView(obs) {
 
   // Group objects by x position to show stacking
   const onTable = Object.entries(obs._objects).filter(([n,o]) => !o.inBin && !o.isHeld);
+  // Objects that are drawn as the base of a blocker stack — skip them in the main loop
+  const drawnAsBase = new Set(onTable.filter(([,o]) => o.blocking).map(([,o]) => o.blocking));
   const BSIZE = 34;
-  const spacing = Math.min(70, (SW - 40) / Math.max(onTable.length, 1));
-  const startX = SW/2 - (onTable.length-1) * spacing/2;
+  const visibleItems = onTable.filter(([n]) => !drawnAsBase.has(n));
+  const spacing = Math.min(70, (SW - 40) / Math.max(visibleItems.length, 1));
+  const startX = SW/2 - (visibleItems.length-1) * spacing/2;
 
-  onTable.forEach(([name, obj], i) => {
+  visibleItems.forEach(([name, obj], i) => {
     const col = COLORS[name] || '#aaa';
     const blocked = !obj.reachable;
     const cx = startX + i * spacing;
