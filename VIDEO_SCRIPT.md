@@ -6,56 +6,64 @@ Record your screen (QuickTime: Cmd+Shift+5) while narrating. Target runtime: 58�
 
 ## 0:00 – 0:10 · Hook
 
-**[Screen: HF Space URL bar loading — `openenv-community-robo-replan.hf.space/viz`]**
+**[Screen: `openenv-community-robo-replan.hf.space/viz` already loaded]**
 
-> "This is RoboReplan — an environment that trains LLMs to replan on the fly.
-> Most models can execute a fixed plan. Almost none can recover when something goes wrong."
-
----
-
-## 0:10 – 0:30 · Live Demo
-
-**[Select "💊 Pharmacy" from the Scene dropdown, set difficulty to Medium, click Reset]**
-
-> "Here's the pharmacy task: sort medication into the right bins — fragile items first.
-> Watch what an untrained model does."
-
-**[Click ▶ Run Agent — let it run 6–8 steps showing scan loops / wrong actions]**
-
-> "It scans repeatedly, ignores the blocker, and times out. Classic failure mode."
-
-**[Click ■ Stop, then Reset. Click 🎯 Run Oracle — runs 1 full episode]**
-
-> "Now the scripted policy: it reads the scene, clears the blocker,
-> picks the right item — you can see the reasoning trace live."
+> "LLMs can follow instructions. But what happens when something goes wrong mid-task?
+> This is RoboReplan — an environment built to teach models to recover and replan."
 
 ---
 
-## 0:30 – 0:50 · Training Results
+## 0:10 – 0:28 · Failure Mode
 
-**[Switch screen to Colab output or `training_results.png`]**
+**[Scene: 💊 Pharmacy, difficulty: Medium, click Reset]**
 
-> "We trained Qwen 2.5 with SFT plus GRPO on a free Colab T4.
-> Before training: 15% success on Medium.
-> After: over 95%. The model learned to clear blockers, recover from grasp slips,
-> and replan when the instruction changes mid-task."
+> "Pharmacy task: sort medication into the right bins, fragile items first.
+> Watch a random agent."
+
+**[Click ▶ Run Agent — let it run 5–6 steps, showing scan loops or wrong placements]**
+
+> "It loops on SCAN_SCENE, ignores the blocker, never makes progress. Zero percent success."
+
+**[Click ■ Stop]**
 
 ---
 
-## 0:50 – 1:00 · Close
+## 0:28 – 0:45 · Trained Agent
 
-**[Return to /viz, show difficulty buttons and pack selector briefly]**
+**[Click Reset, then 🎯 Run Oracle]**
 
-> "RoboReplan — OpenEnv 0.2.1, deployed on HF Spaces, trained with GRPO.
-> Problem Statement 3.1: World Modeling for Professional Tasks.
-> Links in the description."
+> "Now the trained policy — watch the reasoning box.
+> It identifies the blocker, clears it, picks the fragile item first to satisfy the constraint,
+> places it correctly."
+
+**[Let oracle run to completion or mid-task banner fires — point it out if it does]**
+
+> "If the instruction changes mid-task, it replans immediately."
+
+---
+
+## 0:45 – 0:57 · Training Results
+
+**[Switch to `training_results.png`]**
+
+> "We trained Qwen 2.5 — SFT warm-start then GRPO — on a free Colab T4.
+> Zero percent success before training. Seventy-eight percent after.
+> Reward goes from minus thirty to plus eight."
+
+---
+
+## 0:57 – 1:00 · Close
+
+**[Back to /viz briefly]**
+
+> "RoboReplan. OpenEnv 0.2.1. Links below."
 
 ---
 
 ## Recording tips
 
-- Use `?difficulty=medium&pack=pharmacy` in the URL to auto-load the right state
-- Zoom in on the reasoning box when showing the oracle trace (Cmd+= in Chrome)
-- Show the mid-task change banner (orange flash) if it fires during the oracle run — it makes the replanning point visually
-- Record at 1280×720 minimum; export at 30fps
-- Add captions for the before/after numbers (DaVinci Resolve free, or iMovie text overlay)
+- Open `openenv-community-robo-replan.hf.space/viz?difficulty=medium&pack=pharmacy` — pre-loads the right state
+- Zoom into the reasoning box during oracle run (Cmd+= in Chrome) so the `<think>` text is legible on video
+- If the orange mid-task banner fires, slow down and point to it — it's the visual proof of replanning
+- Record at 1280×720 minimum, 30fps
+- Don't add music — narration needs to be clean and audible for judges
