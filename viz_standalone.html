@@ -716,10 +716,17 @@ function parseCell(cellStr) {
 }
 
 function normalizeObs(raw) {
+  const visible = (raw.visible_objects || []).map((o) => ({
+    name: o.name,
+    reachable: !!o.reachable,
+    blocking: o.blocking || null,
+    inBin: o.in_bin || null,
+    isHeld: !!o.is_held,
+  }));
   const obs = {
     instruction: raw.instruction || '—',
     stepsRemaining: raw.steps_remaining ?? 0,
-    visibleObjects: raw.visible_objects || [],
+    visibleObjects: visible,
     holding: raw.holding || null,
     completedSubgoals: raw.completed_subgoals || [],
     knownFailures: raw.known_failures || [],
@@ -753,8 +760,8 @@ function normalizeObs(raw) {
       y: base.y,
       reachable: !!o.reachable,
       blocking: o.blocking || null,
-      inBin: o.in_bin || null,
-      isHeld: !!o.is_held || (obs.holding === o.name),
+      inBin: o.inBin || null,
+      isHeld: !!o.isHeld || (obs.holding === o.name),
     };
   }
   return obs;
@@ -936,7 +943,14 @@ async function manualStepAsync(action) {
 
 function buildPolicyPrompt(obs) {
   const objects = obs.visibleObjects
-    .map(o => `${o.name}(${o.reachable ? 'reachable' : 'BLOCKED'})`)
+    .map(o => {
+      const tags = [];
+      tags.push(o.reachable ? 'reachable' : 'BLOCKED');
+      if (o.inBin) tags.push(`in_bin=${o.inBin}`);
+      if (o.name === obs.holding) tags.push('HELD');
+      if (o.blocking) tags.push(`blocking=${o.blocking}`);
+      return `${o.name}(${tags.join(',')})`;
+    })
     .join(', ');
   const valid = (obs.validActions && obs.validActions.length) ? obs.validActions.join(', ') : 'any';
   const preconditions = obs.actionPreconditions ? JSON.stringify(obs.actionPreconditions) : '{}';

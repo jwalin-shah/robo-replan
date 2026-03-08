@@ -139,8 +139,9 @@ class RoboReplanEnv(Environment[RoboAction, RoboObservation, RoboState]):
 
         # Curriculum: update config if level changed
         sr = self._env.logger.metrics.rolling_success_rate()
+        prev_level = self._curriculum.current_level
         new_level = self._curriculum.update(sr)
-        if new_level != self._curriculum.current_level:
+        if new_level != prev_level:
             self._env.cfg = self._curriculum.current_config()
 
         internal_obs = self._env.reset()
