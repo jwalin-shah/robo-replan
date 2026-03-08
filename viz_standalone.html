@@ -1075,9 +1075,7 @@ function updateUI(obs, reward, done) {
     ds.style.display = 'none';
   }
 
-  // Build blocked-by map so canvas can distinguish physical blocker vs hidden/unscanned
-  const blockedByMap = {};
-  for (const o of obs.visibleObjects) { if (o.blocking) blockedByMap[o.blocking] = o.name; }
+  // blockedByMap already built above for obj-list; reuse for canvas
   drawScene(obs, blockedByMap);
   drawSideView(obs);
 }
