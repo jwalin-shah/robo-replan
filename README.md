@@ -167,7 +167,7 @@ The key lever: our reward penalises **repeated failures** (−2.5) more than fir
 
 Training uses Group Relative Policy Optimization (GRPO) — no value function, just online RL against the live environment reward. Two phases: SFT warm-start on scripted demonstrations, then GRPO to exceed them.
 
-### Colab (Qwen2.5-0.5B-Instruct, free T4, ~40 min)
+### Results (Qwen2.5-0.5B-Instruct, Northflank H100)
 
 | Metric | Before (random) | After (SFT + GRPO) |
 |---|---|---|
@@ -176,7 +176,7 @@ Training uses Group Relative Policy Optimization (GRPO) — no value function, j
 
 ![Training Results](training_results.png)
 
-Results from `train/colab_train.ipynb`. The notebook also plots **GRPO reward over time** (batch mean + smoothed curve) and saves `grpo_reward_over_time.png`.
+Full training run via `train/run_training.py` on H100. Lightweight reproducible version: `train/colab_train.ipynb` (runs on free Colab T4 or Kaggle GPU). The notebook also plots **GRPO reward over time** (batch mean + smoothed curve) and saves `grpo_reward_over_time.png`.
 
 **How to run the notebook (Colab):** Open [train/colab_train.ipynb](https://colab.research.google.com/github/jwalin-shah/robo-replan/blob/main/train/colab_train.ipynb) in Colab → **Runtime → Change runtime type → T4 GPU** → Run all cells (~40–60 min). Quick test: run only cells 1–2 to verify setup (clone, env import).
 

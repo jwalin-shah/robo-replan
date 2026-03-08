@@ -59,7 +59,7 @@ We trained Qwen2.5-0.5B using two phases:
 - **0% success rate** on medium tasks (−29.9 avg reward)
 - The model scans repeatedly, ignores blockers, times out
 
-**After SFT + GRPO (Colab T4, ~40 min):**
+**After SFT + GRPO (Northflank H100):**
 - **78% success rate** on medium tasks (+8.2 avg reward)
 - The model clears blockers, recovers from failures, follows constraints
 
