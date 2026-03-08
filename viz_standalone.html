@@ -539,7 +539,8 @@ function w2c(wx, wy) {
   return [W/2 + wx * 580, H/2 - wy * 580];
 }
 
-function drawScene(obs) {
+function drawScene(obs, blockedByMap) {
+  blockedByMap = blockedByMap || {};
   if (!obs) return;
   ctx.clearRect(0,0,W,H);
 
@@ -639,13 +640,20 @@ function drawScene(obs) {
     ctx.lineWidth = held ? 2.5 : 1.5;
     ctx.stroke();
 
-    // Blocked overlay — semi-transparent overlay + X
+    // Blocked overlay: × for physically blocked, ? for hidden/unscanned
     if (blocked) {
       ctx.fillStyle = 'rgba(0,0,0,0.35)';
       ctx.fillRect(cx-S, cy-S+BY, S*2, S*2);
-      ctx.strokeStyle = '#e06060cc'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(cx-10,cy-10+BY); ctx.lineTo(cx+10,cy+10+BY); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(cx+10,cy-10+BY); ctx.lineTo(cx-10,cy+10+BY); ctx.stroke();
+      if (arguments[5]) {
+        // hidden — amber question mark
+        ctx.fillStyle = '#c8a040'; ctx.font = 'bold 16px monospace'; ctx.textAlign = 'center';
+        ctx.fillText('?', cx, cy + BY + 6);
+      } else {
+        // physically blocked — red X
+        ctx.strokeStyle = '#e06060cc'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(cx-10,cy-10+BY); ctx.lineTo(cx+10,cy+10+BY); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(cx+10,cy-10+BY); ctx.lineTo(cx-10,cy+10+BY); ctx.stroke();
+      }
     }
 
     // Held glow
@@ -680,9 +688,11 @@ function drawScene(obs) {
     const blocked = !obj.reachable;
     const shortLabel = name.replace('_block','').replace('_vial','').replace('_bag','').replace('_pen','').replace('_sample','').replace('_agent','').replace('_package','').replace('_pallet','').replace('_parcel','').replace('_box','').replace('_drum','').replace('_alpha','α').replace('_beta','β').replace('_gamma','γ').replace('_delta','δ').replace('_epsilon','ε').toUpperCase().slice(0, 6);
 
+    // hidden = unreachable but NOT because something is physically on top
+    const isHidden = blocked && !blockedByMap[name];
     // For blockers: draw slightly above the blocked object (offset up to show "on top")
     const yOff = obj.blocking ? -6 : 0;
-    drawCube(cx, cy + yOff, col, held, blocked, shortLabel);
+    drawCube(cx, cy + yOff, col, held, blocked, shortLabel, isHidden);
   }
 
   // Gripper
@@ -1056,7 +1066,10 @@ function updateUI(obs, reward, done) {
     ds.style.display = 'none';
   }
 
-  drawScene(obs);
+  // Build blocked-by map so canvas can distinguish physical blocker vs hidden/unscanned
+  const blockedByMap = {};
+  for (const o of obs.visibleObjects) { if (o.blocking) blockedByMap[o.blocking] = o.name; }
+  drawScene(obs, blockedByMap);
   drawSideView(obs);
 }
 
