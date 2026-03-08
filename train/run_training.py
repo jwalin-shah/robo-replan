@@ -90,6 +90,10 @@ SFT_GRAD_ACCUM = int(os.environ.get("SFT_GRAD_ACCUM", "2"))
 SCAN_ORACLE_KEEP_PROB = float(os.environ.get("SCAN_ORACLE_KEEP_PROB", "0.35"))
 PICK_LOOP_PENALTY = float(os.environ.get("PICK_LOOP_PENALTY", "2.5"))
 INVALID_ACTION_BASE_PENALTY = float(os.environ.get("INVALID_ACTION_BASE_PENALTY", "4.0"))
+EXCEPTION_PENALTY = float(os.environ.get("EXCEPTION_PENALTY", "10.0"))
+MOVE_NO_PROGRESS_PENALTY = float(os.environ.get("MOVE_NO_PROGRESS_PENALTY", "0.9"))
+DOMINANCE_THRESHOLD = float(os.environ.get("DOMINANCE_THRESHOLD", "0.6"))
+DOMINANCE_BASE_PENALTY = float(os.environ.get("DOMINANCE_BASE_PENALTY", "2.0"))
 
 CFG_BY_NAME = {
     "easy": EnvConfig.easy,
@@ -167,11 +171,27 @@ def extract_action(text: str):
     clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip().upper()
     normalized = re.sub(r'[^A-Z_ ]+', ' ', clean)
     normalized = re.sub(r'\s+', ' ', normalized).strip()
+    # Parse strictly from the first token span to avoid accidental matches later in text.
+    first_span = normalized.split("  ")[0].split("\n")[0].strip()
+    if first_span in ACTIONS:
+        return first_span
+    first_words = " ".join(first_span.split(" ")[:3]).strip()
+    spaced_to_action = {a.replace("_", " "): a for a in ACTIONS}
+    if first_words in spaced_to_action:
+        return spaced_to_action[first_words]
+    if first_span in ("PLACE", "PLACE BIN", "PLACE BIN A", "PLACE A"):
+        return "PLACE_BIN_A"
+    if first_span in ("PLACE BIN B", "PLACE B"):
+        return "PLACE_BIN_B"
+    if first_span in ("SCAN", "SCAN SCENE"):
+        return "SCAN_SCENE"
+    if first_span in ("CLEAR", "CLEAR BLOCKER"):
+        return "CLEAR_BLOCKER"
+
     for a in sorted(ACTIONS, key=len, reverse=True):
         if a in clean:
             return a
     # Accept common variants like "MOVE TO RED" / "PLACE BIN A".
-    spaced_to_action = {a.replace("_", " "): a for a in ACTIONS}
     for spaced, canonical in spaced_to_action.items():
         if spaced in normalized:
             return canonical
@@ -438,10 +458,12 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             "valid": 0,
             "invalid": 0,
             "parse_fail": 0,
+            "exceptions": 0,
             "action_counts": {},
             "dominance_penalty_scale": 1.0,
             "scan_penalty_scale": 1.0,
             "invalid_pick_scale": 1.0,
+            "exception_debug_left": 10,
         }
     reward_fn._calls += 1
 
@@ -451,7 +473,7 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
     if reward_fn._stats["action_counts"]:
         top_action, top_count = max(reward_fn._stats["action_counts"].items(), key=lambda kv: kv[1])
         top_share = top_count / total_seen
-    reward_fn._stats["dominance_penalty_scale"] = 1.0 + max(0.0, top_share - 0.55) * 7.0
+    reward_fn._stats["dominance_penalty_scale"] = 1.0 + max(0.0, top_share - DOMINANCE_THRESHOLD) * 7.0
 
     batch_actions = []
     batch_rewards = []
@@ -598,6 +620,9 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             if progress_delta <= 1e-6 and progress_pct is not None and progress_pct < 0.95:
                 shaped_reward -= 0.15
 
+            if action.startswith("MOVE_TO_") and progress_delta <= 1e-6:
+                shaped_reward -= MOVE_NO_PROGRESS_PENALTY
+
             # Reward oracle alignment only when oracle action is in model action space.
             if oracle_action in ACTIONS and action == oracle_action:
                 shaped_reward += 2.0
@@ -613,6 +638,19 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
                 and action != oracle_action
             ):
                 shaped_reward -= 1.8 * reward_fn._stats["dominance_penalty_scale"]
+            if top_action and action == top_action and top_share > DOMINANCE_THRESHOLD:
+                shaped_reward -= DOMINANCE_BASE_PENALTY * reward_fn._stats["dominance_penalty_scale"]
+
+            same_tail = 0
+            for h in reversed(history):
+                if h == action:
+                    same_tail += 1
+                else:
+                    break
+            if same_tail >= 2:
+                shaped_reward -= 0.8 + 0.4 * min(same_tail - 2, 6)
+            if same_tail >= 5:
+                shaped_reward -= 6.0
 
             # Explicitly reward actual task progress.
             if progress_delta > 0:
@@ -623,13 +661,22 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             batch_rewards.append(shaped_reward)
             batch_results.append(result.info.get("result", "UNKNOWN"))
             batch_oracles.append(oracle_action)
-        except Exception:
-            shaped_reward = -1.0
+        except Exception as exc:
+            shaped_reward = -EXCEPTION_PENALTY
+            reward_fn._stats["exceptions"] += 1
             rewards.append(shaped_reward)
             batch_actions.append(action)
             batch_rewards.append(shaped_reward)
             batch_results.append("EXCEPTION")
             batch_oracles.append(None)
+            if reward_fn._stats["exception_debug_left"] > 0:
+                print(
+                    "[reward-exception]",
+                    f"idx={i}",
+                    f"action={action}",
+                    f"err={type(exc).__name__}:{exc}",
+                )
+                reward_fn._stats["exception_debug_left"] -= 1
 
     if reward_fn._calls % MONITOR_EVERY == 0:
         stats = reward_fn._stats
@@ -637,6 +684,7 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
         valid_rate = 100.0 * stats["valid"] / total
         invalid_rate = 100.0 * stats["invalid"] / total
         parse_fail_rate = 100.0 * stats["parse_fail"] / total
+        exception_rate = 100.0 * stats["exceptions"] / total
         top_actions = sorted(stats["action_counts"].items(), key=lambda kv: kv[1], reverse=True)[:5]
         elapsed = time.time() - reward_fn._start
         batch_mean = sum(batch_rewards) / max(1, len(batch_rewards))
@@ -662,6 +710,7 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             f"valid={valid_rate:.1f}%",
             f"invalid={invalid_rate:.1f}%",
             f"parse_fail={parse_fail_rate:.1f}%",
+            f"exception={exception_rate:.1f}%",
             f"top_actions={top_actions}",
         )
         collapse_flag = "OK"
