@@ -33,9 +33,11 @@
     .obj-row { display: flex; gap: 8px; align-items: center; font-size: 0.8rem; }
     .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
     .tag { background: #2a2a36; border-radius: 4px; padding: 1px 6px; font-size: 0.68rem; color: #aaa; }
-    .tag.blocked { background: #3a1a1a; color: #e06060; }
-    .tag.hidden  { background: #2a2a1a; color: #b8a060; }
-    .tag.held    { background: #1a3a1a; color: #60e090; }
+    .tag.blocked  { background: #3a1a1a; color: #e06060; }
+    .tag.hidden   { background: #2a2a1a; color: #b8a060; }
+    .tag.held     { background: #1a3a1a; color: #60e090; }
+    .tag.fragile  { background: #2a1a3a; color: #c080f0; }
+    .tag.heavy    { background: #1a2a3a; color: #6090d0; }
     .reasoning-box { background: #131320; border-left: 5px solid #5a8fd5; border-radius: 4px; padding: 10px 12px; font-size: 0.82rem; color: #a8ccee; line-height: 1.6; font-style: italic; margin-bottom: 8px; white-space: pre-wrap; word-break: break-word; }
     .action-box    { background: #0e2a0e; border-left: 5px solid #3a9a3a; border-radius: 4px; padding: 8px 12px; font-size: 0.92rem; color: #80e880; font-family: monospace; font-weight: bold; letter-spacing: 0.08em; }
     .log { display: flex; flex-direction: column; gap: 3px; max-height: 180px; overflow-y: auto; }
@@ -170,7 +172,7 @@
     <div>
       <h2>Controls</h2>
       <div class="controls">
-        <button class="primary" onclick="resetEp()">Reset</button>
+        <button class="primary" onclick="resetEp()" title="Randomizes a new scenario each time">Reset 🎲</button>
         <button onclick="togglePlay()" id="play-btn">▶ Run Agent</button>
         <button onclick="modelStep()" id="model-btn">🤖 Model Step</button>
         <button onclick="oracleStep()" id="oracle-btn" style="background:#1a2a3a;border-color:#3a6a9a;color:#7ec8f7">🎯 Oracle Step</button>
@@ -690,9 +692,12 @@ function drawScene(obs, blockedByMap) {
 
     // hidden = unreachable but NOT because something is physically on top
     const isHidden = blocked && !blockedByMap[name];
+    // Append trait icon to label if revealed
+    const trait = (blockedByMap && obs.discoveredTraits) ? obs.discoveredTraits[name] : null;
+    const traitSuffix = trait === 'fragile' ? ' 💜' : trait === 'heavy' ? ' 🔵' : '';
     // For blockers: draw slightly above the blocked object (offset up to show "on top")
     const yOff = obj.blocking ? -6 : 0;
-    drawCube(cx, cy + yOff, col, held, blocked, shortLabel, isHidden);
+    drawCube(cx, cy + yOff, col, held, blocked, shortLabel + traitSuffix, isHidden);
   }
 
   // Gripper
@@ -875,6 +880,7 @@ function normalizeObs(raw) {
     nextTargetCell: raw.next_target_cell || null,
     distanceToNextGoal: raw.distance_to_next_goal ?? null,
     deadlineStatus: raw.deadline_status || {},
+    discoveredTraits: raw.discovered_traits || {},
     _objects: {},
     _gripperX: 0,
     _gripperY: 0.25,
@@ -982,8 +988,11 @@ function updateUI(obs, reward, done) {
     const tags = [];
     if (!o.reachable && !o.inBin) {
       if (blockedByMap[o.name]) tags.push('<span class="tag blocked">blocked</span>');
-      else tags.push('<span class="tag hidden">hidden</span>');
+      else tags.push('<span class="tag hidden">🔍 scan to reveal</span>');
     }
+    const trait = obs.discoveredTraits[o.name];
+    if (trait === 'fragile') tags.push('<span class="tag fragile">💜 fragile</span>');
+    else if (trait === 'heavy') tags.push('<span class="tag heavy">🔵 heavy</span>');
     if (o.name === obs.holding)   tags.push('<span class="tag held">held</span>');
     if (o.inBin) tags.push(`<span class="tag">in bin ${o.inBin}</span>`);
     return `<div class="obj-row"><div class="dot" style="background:${col}"></div><span>${o.name}</span>${tags.join('')}</div>`;
