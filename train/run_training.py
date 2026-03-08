@@ -65,9 +65,8 @@ SYSTEM = (
     "You are a robot planning agent on a tabletop. Complete manipulation tasks "
     "by choosing ONE action per step.\n\n"
     f"Actions: {ACTION_LIST_STR}\n\n"
-    "Think step by step inside <think>...</think> tags, then output ONLY the action name.\n"
+    "Output ONLY one action name from the list. No explanation, no tags, no extra text.\n"
     "Example:\n"
-    "<think>Red block is blocked by blue. Must clear blue first, then pick red.</think>\n"
     "CLEAR_BLOCKER"
 )
 
@@ -114,9 +113,61 @@ def json_to_scenario(s: str) -> ScenarioConfig:
 
 def extract_action(text: str):
     clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip().upper()
+    normalized = re.sub(r'[^A-Z_ ]+', ' ', clean)
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
     for a in sorted(ACTIONS, key=len, reverse=True):
         if a in clean:
             return a
+    # Accept common variants like "MOVE TO RED" / "PLACE BIN A".
+    spaced_to_action = {a.replace("_", " "): a for a in ACTIONS}
+    for spaced, canonical in spaced_to_action.items():
+        if spaced in normalized:
+            return canonical
+    # If model outputs just color/direction words, map them conservatively.
+    keyword_map = {
+        "RED": "MOVE_TO_RED",
+        "BLUE": "MOVE_TO_BLUE",
+        "GREEN": "MOVE_TO_GREEN",
+        "YELLOW": "MOVE_TO_YELLOW",
+        "PURPLE": "MOVE_TO_PURPLE",
+        "NORTH": "MOVE_NORTH",
+        "SOUTH": "MOVE_SOUTH",
+        "EAST": "MOVE_EAST",
+        "WEST": "MOVE_WEST",
+    }
+    for k, v in keyword_map.items():
+        if normalized == k:
+            return v
+    if normalized == "PICK":
+        return "PICK"
+    if normalized in ("PLACE BIN A", "PLACE A"):
+        return "PLACE_BIN_A"
+    if normalized in ("PLACE BIN B", "PLACE B"):
+        return "PLACE_BIN_B"
+    if normalized in ("CLEAR BLOCKER", "CLEAR"):
+        return "CLEAR_BLOCKER"
+    if normalized in ("SCAN SCENE", "SCAN"):
+        return "SCAN_SCENE"
+    if normalized in ("ROTATE LEFT", "LEFT ROTATE"):
+        return "ROTATE_LEFT"
+    if normalized in ("ROTATE RIGHT", "RIGHT ROTATE"):
+        return "ROTATE_RIGHT"
+    if normalized in ("MOVE NORTH",):
+        return "MOVE_NORTH"
+    if normalized in ("MOVE SOUTH",):
+        return "MOVE_SOUTH"
+    if normalized in ("MOVE EAST",):
+        return "MOVE_EAST"
+    if normalized in ("MOVE WEST",):
+        return "MOVE_WEST"
+    if normalized in ("WAIT",):
+        return "WAIT"
+    if normalized in ("TOGGLE LIGHT",):
+        return "TOGGLE_LIGHT"
+    # Fallback: first token exact action.
+    token = normalized.split(" ")[0] if normalized else ""
+    if token in ACTIONS:
+        return token
     return None
 
 def extract_reasoning(text: str) -> str:
