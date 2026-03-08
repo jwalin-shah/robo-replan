@@ -55,6 +55,7 @@ class SimWrapper:
         self._state = SimState()
         self._last_moved_to: Optional[str] = None
         self._current_cfg: Optional[ScenarioConfig] = None
+        self._facing: str = "N"
 
         if not use_stub:
             self._init_robosuite()
@@ -167,6 +168,7 @@ class SimWrapper:
     def _build_state_from_config(self, cfg: ScenarioConfig):
         """Build stub SimState from randomized scenario config."""
         self._last_moved_to = None
+        self._facing = "N"
         objects = {}
         for obj_name in cfg.objects:
             x, y = cfg.positions.get(obj_name, (0.0, 0.0))
@@ -184,6 +186,31 @@ class SimWrapper:
             holding=None,
         )
         self._current_cfg = cfg
+
+    def get_facing(self) -> str:
+        return self._facing
+
+    def _cell_from_pos(self, pos: np.ndarray) -> tuple[int, int]:
+        x = int(round(float(pos[0]) / 0.1))
+        y = int(round(float(pos[1]) / 0.1))
+        return max(-3, min(3, x)), max(-3, min(3, y))
+
+    def _step_gripper(self, dx: int, dy: int) -> None:
+        s = self._state
+        cell_x, cell_y = self._cell_from_pos(s.gripper_pos)
+        nx = max(-3, min(3, cell_x + dx))
+        ny = max(-3, min(3, cell_y + dy))
+        s.gripper_pos = np.array([nx * 0.1, ny * 0.1, s.gripper_pos[2]])
+
+    def _rotate(self, clockwise: bool) -> None:
+        dirs = ["N", "E", "S", "W"]
+        idx = dirs.index(self._facing)
+        self._facing = dirs[(idx + (1 if clockwise else -1)) % 4]
+
+    def _is_adjacent(self, obj: ObjectState) -> bool:
+        gx, gy = self._cell_from_pos(self._state.gripper_pos)
+        ox, oy = self._cell_from_pos(obj.pos)
+        return abs(gx - ox) + abs(gy - oy) <= 1
 
     # ── Execute action ─────────────────────────────────────────────────
 
@@ -207,6 +234,24 @@ class SimWrapper:
         s = self._state
 
         if action == "SCAN_SCENE":
+            return "SUCCESS"
+        elif action == "MOVE_NORTH":
+            self._step_gripper(0, 1)
+            return "SUCCESS"
+        elif action == "MOVE_SOUTH":
+            self._step_gripper(0, -1)
+            return "SUCCESS"
+        elif action == "MOVE_EAST":
+            self._step_gripper(1, 0)
+            return "SUCCESS"
+        elif action == "MOVE_WEST":
+            self._step_gripper(-1, 0)
+            return "SUCCESS"
+        elif action == "ROTATE_LEFT":
+            self._rotate(clockwise=False)
+            return "SUCCESS"
+        elif action == "ROTATE_RIGHT":
+            self._rotate(clockwise=True)
             return "SUCCESS"
 
         elif action.startswith("MOVE_TO_"):
@@ -235,7 +280,7 @@ class SimWrapper:
             ))
             for _, obj in candidates:
                 dist = np.linalg.norm(s.gripper_pos[:2] - obj.pos[:2])
-                if dist < 0.15:
+                if dist < 0.15 or self._is_adjacent(obj):
                     obj.is_held = True
                     s.holding = obj.name
                     s.gripper_open = False
@@ -258,6 +303,8 @@ class SimWrapper:
         elif action == "CLEAR_BLOCKER":
             for obj in s.objects.values():
                 if obj.blocking is not None and obj.reachable:
+                    if not self._is_adjacent(obj):
+                        continue
                     blocked_name = obj.blocking
                     obj.blocking = None
                     obj.pos = obj.pos + np.array([0.28, 0.1, 0])

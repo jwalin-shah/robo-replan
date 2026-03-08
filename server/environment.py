@@ -28,6 +28,40 @@ class TabletopPlanningEnv:
         self._mid_task_changed = False
         self._reset_internal()
 
+    def _nav_enabled(self) -> bool:
+        return bool(getattr(self.cfg.task, "navigation_mode", False))
+
+    def _gripper_cell(self) -> tuple[int, int]:
+        p = self.sim.get_state().gripper_pos
+        return int(round(float(p[0]) / 0.1)), int(round(float(p[1]) / 0.1))
+
+    def _object_cell(self, obj_name: str) -> Optional[tuple[int, int]]:
+        obj = self.sim.get_state().objects.get(obj_name)
+        if obj is None:
+            return None
+        return int(round(float(obj.pos[0]) / 0.1)), int(round(float(obj.pos[1]) / 0.1))
+
+    def _is_adjacent_to(self, obj_name: str) -> bool:
+        oc = self._object_cell(obj_name)
+        if oc is None:
+            return False
+        gx, gy = self._gripper_cell()
+        ox, oy = oc
+        return abs(gx - ox) + abs(gy - oy) <= 1
+
+    def _nav_step_toward(self, target: tuple[int, int]) -> str:
+        gx, gy = self._gripper_cell()
+        tx, ty = target
+        if tx > gx:
+            return "MOVE_EAST"
+        if tx < gx:
+            return "MOVE_WEST"
+        if ty > gy:
+            return "MOVE_NORTH"
+        if ty < gy:
+            return "MOVE_SOUTH"
+        return "SCAN_SCENE"
+
     # ── Public interface ────────────────────────────────────────────────
 
     def reset(self) -> Observation:
@@ -321,19 +355,38 @@ class TabletopPlanningEnv:
         state = self.sim.get_state()
         valid = ["SCAN_SCENE"]
 
-        for obj in state.objects.values():
-            if obj.reachable and not obj.is_held and obj.in_bin is None:
-                color = obj.name.replace("_block", "").upper()
-                valid.append(f"MOVE_TO_{color}")
+        if self._nav_enabled():
+            valid += ["MOVE_NORTH", "MOVE_SOUTH", "MOVE_EAST", "MOVE_WEST", "ROTATE_LEFT", "ROTATE_RIGHT"]
+        else:
+            for obj in state.objects.values():
+                if obj.reachable and not obj.is_held and obj.in_bin is None:
+                    color = obj.name.replace("_block", "").upper()
+                    valid.append(f"MOVE_TO_{color}")
 
         if state.holding:
             valid += ["PLACE_BIN_A", "PLACE_BIN_B"]
-        elif any(o.reachable and not o.is_held and o.in_bin is None
-                 for o in state.objects.values()):
-            valid.append("PICK")
+        else:
+            has_pick = False
+            for obj in state.objects.values():
+                if not (obj.reachable and not obj.is_held and obj.in_bin is None):
+                    continue
+                if self._nav_enabled():
+                    if self._is_adjacent_to(obj.name):
+                        has_pick = True
+                        break
+                else:
+                    has_pick = True
+                    break
+            if has_pick:
+                valid.append("PICK")
 
-        if any(o.blocking for o in state.objects.values() if o.reachable):
+        for obj in state.objects.values():
+            if not (obj.blocking and obj.reachable):
+                continue
+            if self._nav_enabled() and not self._is_adjacent_to(obj.name):
+                continue
             valid.append("CLEAR_BLOCKER")
+            break
 
         return valid
 
@@ -382,6 +435,12 @@ class TabletopPlanningEnv:
             if not obj or obj.in_bin:
                 continue
             if obj.reachable:
+                if self._nav_enabled():
+                    if self._is_adjacent_to(obj_name):
+                        return "PICK"
+                    target = self._object_cell(obj_name)
+                    if target is not None:
+                        return self._nav_step_toward(target)
                 color = obj_name.replace("_block", "").upper()
                 return f"MOVE_TO_{color}"
             return "CLEAR_BLOCKER"
@@ -439,5 +498,8 @@ class TabletopPlanningEnv:
             last_action=last_action,
             last_result=last_result,
             action_history=history,
+            nav_mode=self._nav_enabled(),
+            gripper_cell=f"{self._gripper_cell()[0]},{self._gripper_cell()[1]}",
+            gripper_facing=self.sim.get_facing(),
             **extra,
         )

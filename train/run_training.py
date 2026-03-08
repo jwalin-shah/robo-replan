@@ -8,6 +8,8 @@ sys.path.insert(0, '..')
 import re
 import json
 import random
+import os
+import time
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from trl import GRPOTrainer, GRPOConfig
@@ -18,12 +20,41 @@ from server.models import Action
 from server.robosim.randomizer import ScenarioConfig
 
 ACTIONS = [a.value for a in Action]
-MODEL   = 'Qwen/Qwen2.5-0.5B-Instruct'
+ACTION_LIST_STR = " | ".join(ACTIONS)
+MODEL   = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-0.5B-Instruct")
+MONITOR_EVERY = int(os.environ.get("MONITOR_EVERY", "25"))
+INCLUDE_VALID_HINT = os.environ.get("INCLUDE_VALID_HINT", "0").lower() in ("1", "true", "yes")
+METRICS_JSONL = os.environ.get("METRICS_JSONL", "./logs/train_metrics.jsonl")
+TRAIN_DIFFICULTY = os.environ.get("TRAIN_DIFFICULTY", "easy").strip().lower()
+EVAL_EPISODES = int(os.environ.get("EVAL_EPISODES", "100"))
+FIXED_EVAL_SEED = int(os.environ.get("FIXED_EVAL_SEED", "1337"))
+
+CFG_BY_NAME = {
+    "easy": EnvConfig.easy,
+    "medium": EnvConfig.medium,
+    "hard": EnvConfig.hard,
+}
+if TRAIN_DIFFICULTY not in CFG_BY_NAME:
+    raise ValueError(f"Unsupported TRAIN_DIFFICULTY={TRAIN_DIFFICULTY}; use one of {list(CFG_BY_NAME)}")
+TRAIN_CFG = CFG_BY_NAME[TRAIN_DIFFICULTY]()
+# Completion-first weighting to reduce reward hacking.
+TRAIN_CFG.reward.task_complete = 25.0
+TRAIN_CFG.reward.efficiency_bonus_max = 3.0
+TRAIN_CFG.reward.successful_pick = 0.4
+TRAIN_CFG.reward.blocker_cleared = 0.6
+TRAIN_CFG.reward.correct_placement = 1.0
+TRAIN_CFG.reward.recovery_after_failure = 0.3
+TRAIN_CFG.reward.useful_scan = 0.05
+TRAIN_CFG.reward.wrong_bin = -6.0
+TRAIN_CFG.reward.first_failure = -2.0
+TRAIN_CFG.reward.repeated_failure = -3.5
+TRAIN_CFG.reward.constraint_violation = -6.0
+TRAIN_CFG.reward.step_cost = -0.08
 
 SYSTEM = (
     "You are a robot planning agent on a tabletop. Complete manipulation tasks "
     "by choosing ONE action per step.\n\n"
-    "Actions: SCAN_SCENE | MOVE_TO_RED | MOVE_TO_BLUE | MOVE_TO_GREEN | MOVE_TO_YELLOW | MOVE_TO_PURPLE | PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER\n\n"
+    f"Actions: {ACTION_LIST_STR}\n\n"
     "Think step by step inside <think>...</think> tags, then output ONLY the action name.\n"
     "Example:\n"
     "<think>Red block is blocked by blue. Must clear blue first, then pick red.</think>\n"
@@ -50,8 +81,8 @@ def obs_to_user_msg(obs):
         f"Failures: {failures}\n"
         f"History: {history}\n"
         f"Last: {obs.last_action or 'none'} -> {obs.last_result or 'n/a'}\n"
-        f"Valid now: {valid}\n"
-        f"Steps left: {obs.steps_remaining}\n\nNext action:"
+        + (f"Valid now: {valid}\n" if INCLUDE_VALID_HINT else "")
+        + f"Steps left: {obs.steps_remaining}\n\nNext action:"
     )
 
 def scenario_to_json(scen) -> str:
@@ -104,8 +135,10 @@ def parse_prompt_context(prompt_messages):
 
     return valid_actions, last_action, last_result
 
-def eval_policy(policy_fn, n_episodes=50):
-    env = TabletopPlanningEnv(config=EnvConfig.easy())
+def eval_policy(policy_fn, n_episodes=50, seed: int | None = None):
+    if seed is not None:
+        random.seed(seed)
+    env = TabletopPlanningEnv(config=TRAIN_CFG)
     rewards, successes = [], []
     for _ in range(n_episodes):
         obs = env.reset()
@@ -124,6 +157,11 @@ def eval_policy(policy_fn, n_episodes=50):
         'avg_reward':   sum(rewards)   / n_episodes,
     }
 
+def eval_policy_suite(policy_fn):
+    fixed = eval_policy(policy_fn, n_episodes=EVAL_EPISODES, seed=FIXED_EVAL_SEED)
+    general = eval_policy(policy_fn, n_episodes=EVAL_EPISODES, seed=None)
+    return fixed, general
+
 # ── Baseline ───────────────────────────────────────────────────────────
 
 print("=" * 50)
@@ -136,7 +174,7 @@ print(f"  Avg reward:   {baseline['avg_reward']:.2f}")
 # ── Build dataset ──────────────────────────────────────────────────────
 
 print("\nBuilding oracle dataset...")
-cfg = EnvConfig.easy()
+cfg = TRAIN_CFG
 cfg.obs.include_oracle_hint = True
 env = TabletopPlanningEnv(config=cfg)
 
@@ -191,6 +229,8 @@ print("=" * 50)
 def reward_fn(completions, prompts=None, scenario=None, **kwargs):
     if not hasattr(reward_fn, "_calls"):
         reward_fn._calls = 0
+        reward_fn._start = time.time()
+        reward_fn._flat_streak = 0
         reward_fn._stats = {
             "total": 0,
             "valid": 0,
@@ -230,7 +270,7 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
                 continue
             reward_fn._stats["valid"] += 1
 
-            eval_env = TabletopPlanningEnv(config=EnvConfig.easy())
+            eval_env = TabletopPlanningEnv(config=TRAIN_CFG)
             scen = json_to_scenario(scenario[i])
             eval_env.sim._build_state_from_config(scen)
             eval_env._scenario_cfg        = scen
@@ -279,18 +319,28 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             batch_results.append("EXCEPTION")
             batch_oracles.append(None)
 
-    if reward_fn._calls % 50 == 0:
+    if reward_fn._calls % MONITOR_EVERY == 0:
         stats = reward_fn._stats
         total = max(1, stats["total"])
         valid_rate = 100.0 * stats["valid"] / total
         invalid_rate = 100.0 * stats["invalid"] / total
         parse_fail_rate = 100.0 * stats["parse_fail"] / total
         top_actions = sorted(stats["action_counts"].items(), key=lambda kv: kv[1], reverse=True)[:5]
+        elapsed = time.time() - reward_fn._start
+        batch_mean = sum(batch_rewards) / max(1, len(batch_rewards))
+        batch_std = 0.0
+        if len(batch_rewards) > 1:
+            m = batch_mean
+            batch_std = (sum((x - m) ** 2 for x in batch_rewards) / len(batch_rewards)) ** 0.5
+        if batch_std < 0.05:
+            reward_fn._flat_streak += 1
+        else:
+            reward_fn._flat_streak = 0
 
         print(
             "[reward-debug]",
             f"call={reward_fn._calls}",
-            f"mean={sum(batch_rewards) / max(1, len(batch_rewards)):.3f}",
+            f"mean={batch_mean:.3f}",
             f"actions={batch_actions[:4]}",
             f"results={batch_results[:4]}",
             f"oracles={batch_oracles[:4]}",
@@ -302,6 +352,46 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             f"parse_fail={parse_fail_rate:.1f}%",
             f"top_actions={top_actions}",
         )
+        collapse_flag = "OK"
+        if reward_fn._flat_streak >= 4:
+            collapse_flag = "COLLAPSE_RISK:low_reward_variance"
+        if top_actions and top_actions[0][1] / total > 0.7:
+            collapse_flag = "COLLAPSE_RISK:action_dominance"
+        print(
+            "[train-monitor]",
+            f"elapsed={elapsed/60:.1f}m",
+            f"batch_std={batch_std:.3f}",
+            f"flat_streak={reward_fn._flat_streak}",
+            f"status={collapse_flag}",
+        )
+        # Live telemetry for dashboards / quick plotting.
+        try:
+            os.makedirs(os.path.dirname(METRICS_JSONL), exist_ok=True)
+            row = {
+                "call": reward_fn._calls,
+                "elapsed_sec": round(elapsed, 2),
+                "batch_mean": round(batch_mean, 5),
+                "batch_std": round(batch_std, 5),
+                "valid_rate": round(valid_rate, 3),
+                "invalid_rate": round(invalid_rate, 3),
+                "parse_fail_rate": round(parse_fail_rate, 3),
+                "flat_streak": reward_fn._flat_streak,
+                "status": collapse_flag,
+                "top_actions": top_actions,
+            }
+            with open(METRICS_JSONL, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row) + "\n")
+            print(
+                "[health]",
+                f"mean={row['batch_mean']:+.3f}",
+                f"std={row['batch_std']:.3f}",
+                f"valid={row['valid_rate']:.1f}%",
+                f"parse_fail={row['parse_fail_rate']:.1f}%",
+                f"top={top_actions[0][0] if top_actions else 'n/a'}",
+                f"status={collapse_flag}",
+            )
+        except Exception as exc:
+            print(f"[health] telemetry_write_failed={exc}")
     return rewards
 
 grpo_config = GRPOConfig(

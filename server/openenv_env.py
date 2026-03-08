@@ -33,6 +33,9 @@ class RoboObservation(Observation):
     goal_progress: Optional[float] = None
     goals_remaining: Optional[int] = None
     oracle_hint: Optional[str] = None
+    nav_mode: bool = False
+    gripper_cell: Optional[str] = None
+    gripper_facing: Optional[str] = None
     prompt: str                          # pre-built LLM prompt
     mid_task_changed: bool = False
 
@@ -48,7 +51,8 @@ class RoboState(RoboObservation):
 SYSTEM = (
     "You are a robot planning agent on a tabletop. "
     "Complete manipulation tasks by choosing ONE action per step.\n\n"
-    "Actions: SCAN_SCENE | MOVE_TO_RED | MOVE_TO_BLUE | MOVE_TO_GREEN | MOVE_TO_YELLOW | MOVE_TO_PURPLE | PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER\n\n"
+    "Actions: SCAN_SCENE | MOVE_NORTH | MOVE_SOUTH | MOVE_EAST | MOVE_WEST | ROTATE_LEFT | ROTATE_RIGHT | "
+    "MOVE_TO_RED | MOVE_TO_BLUE | MOVE_TO_GREEN | MOVE_TO_YELLOW | MOVE_TO_PURPLE | PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER\n\n"
     "Think step by step inside <think>...</think> tags, then output ONLY the action name.\n"
     "Example:\n"
     "<think>Red block is blocked by blue. I must clear blue first, then pick red, then place in bin A.</think>\n"
@@ -67,6 +71,9 @@ def _build_prompt(obs) -> str:
     constraints = "; ".join(obs.active_constraints) or "none"
     valid = ", ".join(obs.valid_actions) if obs.valid_actions else "any"
     progress = f"{obs.goal_progress:.0%}" if obs.goal_progress is not None else "?"
+    nav_line = None
+    if obs.nav_mode:
+        nav_line = f"Navigation: gripper_cell={obs.gripper_cell or '?'} facing={obs.gripper_facing or '?'}"
 
     lines = [
         f"[SYSTEM] {SYSTEM}",
@@ -75,6 +82,7 @@ def _build_prompt(obs) -> str:
         f"Scene: {objects}",
         f"Holding: {obs.holding or 'nothing'}",
         f"Goal progress: {progress}  Goals remaining: {obs.goals_remaining}",
+        *( [nav_line] if nav_line else [] ),
         f"Completed: {subgoals}",
         f"Failures: {failures}",
         f"Constraints: {constraints}",
@@ -190,6 +198,9 @@ class RoboReplanEnv(Environment[RoboAction, RoboObservation, RoboState]):
             goal_progress=obs.goal_progress,
             goals_remaining=obs.goals_remaining,
             oracle_hint=obs.oracle_hint,
+            nav_mode=obs.nav_mode,
+            gripper_cell=obs.gripper_cell,
+            gripper_facing=obs.gripper_facing,
             mid_task_changed=info.get("mid_task_changed", False),
             prompt="",  # fill below
         )

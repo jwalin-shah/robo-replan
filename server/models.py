@@ -5,6 +5,14 @@ from pydantic import BaseModel
 
 class Action(str, Enum):
     SCAN_SCENE    = "SCAN_SCENE"
+    MOVE_NORTH    = "MOVE_NORTH"
+    MOVE_SOUTH    = "MOVE_SOUTH"
+    MOVE_EAST     = "MOVE_EAST"
+    MOVE_WEST     = "MOVE_WEST"
+    ROTATE_LEFT   = "ROTATE_LEFT"
+    ROTATE_RIGHT  = "ROTATE_RIGHT"
+    WAIT          = "WAIT"
+    TOGGLE_LIGHT  = "TOGGLE_LIGHT"
     MOVE_TO_RED   = "MOVE_TO_RED"
     MOVE_TO_BLUE  = "MOVE_TO_BLUE"
     MOVE_TO_GREEN = "MOVE_TO_GREEN"
@@ -47,6 +55,11 @@ class Observation(BaseModel):
     goal_progress: Optional[float] = None       # 0.0–1.0
     goals_remaining: Optional[int] = None
     oracle_hint: Optional[str] = None           # what scripted policy would do
+    nav_mode: bool = False
+    gripper_cell: Optional[str] = None
+    gripper_facing: Optional[str] = None
+    discovered_traits: Optional[dict[str, str]] = None
+    object_deadlines: Optional[dict[str, int]] = None
 
 
 class StepResult(BaseModel):

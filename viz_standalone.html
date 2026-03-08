@@ -129,6 +129,11 @@
       <div class="rbar-bg"><div class="rbar" id="rbar" style="width:50%;background:#4a8a4a"></div></div>
     </div>
 
+    <div>
+      <h2>Model Diagnostics</h2>
+      <div class="list-items" id="diag"></div>
+    </div>
+
     <div id="done-sec" style="display:none">
       <div class="done-banner" id="done-txt"></div>
     </div>
@@ -193,6 +198,7 @@ class Env {
     this.holding  = null;
     this.steps    = 0;
     this.done     = false;
+    this.actionHistory = [];
     this.completedSubgoals = [];
     this.knownFailures     = [];
     this.activeConstraints = [];
@@ -210,6 +216,7 @@ class Env {
   step(action) {
     if (this.done) throw new Error('Episode done. Call reset().');
     const result = this._execute(action);
+    this.actionHistory.push(action);
     this.steps++;
     const reward = this._reward(action, result);
     this._updateState(action, result);
@@ -328,7 +335,48 @@ class Env {
     return true;
   }
 
+  _validActions() {
+    const actions = ['SCAN_SCENE'];
+    const o = this.objects;
+
+    if (!this.holding) {
+      const moveMap = [
+        ['MOVE_TO_RED', 'red_block'],
+        ['MOVE_TO_BLUE', 'blue_block'],
+        ['MOVE_TO_GREEN', 'green_block'],
+        ['MOVE_TO_YELLOW', 'yellow_block'],
+        ['MOVE_TO_PURPLE', 'purple_block'],
+      ];
+      for (const [action, name] of moveMap) {
+        const obj = o[name];
+        if (obj && obj.reachable && !obj.inBin) actions.push(action);
+      }
+
+      let canPick = false;
+      for (const obj of Object.values(o)) {
+        if (!obj.reachable || obj.isHeld || obj.inBin) continue;
+        const dist = Math.hypot(this.gripperX - obj.x, this.gripperY - obj.y);
+        if (dist < 0.15) { canPick = true; break; }
+      }
+      if (canPick) actions.push('PICK');
+    } else {
+      actions.push('PLACE_BIN_A', 'PLACE_BIN_B');
+    }
+
+    for (const obj of Object.values(o)) {
+      if (obj.blocking && obj.reachable) {
+        actions.push('CLEAR_BLOCKER');
+        break;
+      }
+    }
+    return actions;
+  }
+
   _obs(lastAction, lastResult) {
+    const totalGoals = Object.keys(this.requiredPlacements).length;
+    const completedGoals = Object.entries(this.requiredPlacements)
+      .filter(([name, bin]) => this.objects[name]?.inBin === bin).length;
+    const goalProgress = totalGoals ? (completedGoals / totalGoals) : 1.0;
     return {
       instruction: this.instruction,
       stepsRemaining: MAX_STEPS - this.steps,
@@ -339,6 +387,10 @@ class Env {
       completedSubgoals: [...this.completedSubgoals],
       knownFailures: [...this.knownFailures],
       activeConstraints: [...this.activeConstraints],
+      actionHistory: [...this.actionHistory],
+      validActions: this._validActions(),
+      goalProgress,
+      goalsRemaining: Math.max(0, totalGoals - completedGoals),
       lastAction, lastResult,
       // expose raw sim state for canvas
       _objects: this.objects,
@@ -589,6 +641,8 @@ let successCount = 0;
 let playing  = false;
 let playTimer = null;
 let modelBusy = false;
+let recentActions = [];
+let recentRewards = [];
 
 // Build manual buttons
 const grid = document.getElementById('manual-grid');
@@ -638,6 +692,11 @@ function updateUI(obs, reward, done) {
 
   // log row
   if (obs.lastAction) {
+    recentActions.push(obs.lastAction);
+    recentRewards.push(reward);
+    if (recentActions.length > 30) recentActions.shift();
+    if (recentRewards.length > 30) recentRewards.shift();
+
     const ok = obs.lastResult?.startsWith('SUCCESS');
     const row = document.createElement('div');
     row.className = 'log-row';
@@ -646,6 +705,23 @@ function updateUI(obs, reward, done) {
     log.prepend(row);
     if (log.children.length > 40) log.removeChild(log.lastChild);
   }
+
+  // diagnostics
+  const counts = {};
+  for (const a of recentActions) counts[a] = (counts[a] || 0) + 1;
+  const sorted = Object.entries(counts).sort((a,b) => b[1]-a[1]);
+  const top = sorted.length ? `${sorted[0][0]} (${sorted[0][1]}/${recentActions.length})` : 'none';
+  const avgRecentReward = recentRewards.length
+    ? (recentRewards.reduce((x,y)=>x+y,0)/recentRewards.length).toFixed(3)
+    : '0.000';
+  const loopRisk = (sorted.length && (sorted[0][1] / Math.max(1, recentActions.length)) > 0.7)
+    ? 'HIGH'
+    : 'LOW';
+  document.getElementById('diag').innerHTML = `
+    <div class="item con">Top recent action: ${top}</div>
+    <div class="item con">Avg recent reward: ${avgRecentReward}</div>
+    <div class="item con">Loop risk: ${loopRisk}</div>
+  `;
 
   // done
   const ds = document.getElementById('done-sec');
@@ -669,6 +745,8 @@ function updateUI(obs, reward, done) {
 function resetEp() {
   stopAll();
   totalReward = 0; stepCount = 0; episodeCount++;
+  recentActions = [];
+  recentRewards = [];
   document.getElementById('log').innerHTML = '';
   const obs = env.reset();
   document.getElementById('done-sec').style.display = 'none';
@@ -686,6 +764,13 @@ function buildPolicyPrompt(obs) {
   const objects = obs.visibleObjects
     .map(o => `${o.name}(${o.reachable ? 'reachable' : 'BLOCKED'})`)
     .join(', ');
+  const valid = (obs.validActions && obs.validActions.length) ? obs.validActions.join(', ') : 'any';
+  const history = (obs.actionHistory && obs.actionHistory.length)
+    ? obs.actionHistory.slice(-5).join(' -> ')
+    : 'none';
+  const constraints = (obs.activeConstraints && obs.activeConstraints.length)
+    ? obs.activeConstraints.join('; ')
+    : 'none';
   const failures = (obs.knownFailures && obs.knownFailures.length) ? obs.knownFailures.join('; ') : 'none';
   const subgoals = (obs.completedSubgoals && obs.completedSubgoals.length) ? obs.completedSubgoals.join('; ') : 'none yet';
   return (
@@ -694,11 +779,15 @@ function buildPolicyPrompt(obs) {
     + `Instruction: ${obs.instruction}\n`
     + `Scene: ${objects}\n`
     + `Holding: ${obs.holding || 'nothing'}\n`
+    + `Goal progress: ${Math.round((obs.goalProgress || 0) * 100)}%  Goals remaining: ${obs.goalsRemaining ?? '?'}\n`
     + `Completed: ${subgoals}\n`
     + `Failures: ${failures}\n`
+    + `Constraints: ${constraints}\n`
+    + `History: ${history}\n`
     + `Last: ${obs.lastAction || 'none'} -> ${obs.lastResult || 'n/a'}\n`
+    + `Valid now: ${valid}\n`
     + `Steps left: ${obs.stepsRemaining}\n\n`
-    + "Output only the action name."
+    + "Pick one action from Valid now. Output only the action name."
   );
 }
 

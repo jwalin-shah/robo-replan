@@ -27,6 +27,9 @@ class RewardWeights:
     repeated_failure: float = -2.5     # same action:result seen before
     constraint_violation: float = -4.0
     step_cost: float = -0.05
+    timeout_failure: float = -10.0
+    missed_deadline: float = -5.0
+    useless_action: float = -0.4
 
 
 @dataclass
@@ -36,6 +39,8 @@ class ObsConfig:
     include_action_history: int = 5      # last N actions in obs (0 = none)
     include_oracle_hint: bool = False    # scripted policy action (teaching signal)
     include_distance_to_goal: bool = True
+    include_hidden_traits: bool = True
+    include_deadlines: bool = True
 
 
 @dataclass
@@ -52,6 +57,16 @@ class TaskConfig:
     # Mid-task instruction change
     mid_task_change_prob: float = 0.0    # prob per episode of a rule changing mid-way
     mid_task_change_step: int = 8        # at which step the change happens
+    navigation_mode: bool = False
+    lock_wrong_bin_steps: int = 3
+    enable_deadlines: bool = False
+    deadline_min_step: int = 4
+    deadline_max_step: int = 10
+    enable_hidden_traits: bool = True
+    require_scan_for_traits: bool = True
+    enable_distractor_actions: bool = True
+    enable_partial_observability_zones: bool = True
+    adversarial_sampling_prob: float = 0.0
 
 
 @dataclass
@@ -113,10 +128,13 @@ class EnvConfig:
     @classmethod
     def medium(cls):
         return cls(realism=RealismConfig.medium(),
-                   task=TaskConfig(n_blockers_max=2, mid_task_change_prob=0.15))
+                   task=TaskConfig(n_blockers_max=2, mid_task_change_prob=0.15,
+                                   enable_deadlines=True))
 
     @classmethod
     def hard(cls):
         return cls(realism=RealismConfig.hard(),
                    task=TaskConfig(n_objects_max=5, n_blockers_max=3,
-                                   n_targets_max=2, mid_task_change_prob=0.30))
+                                   n_targets_max=2, mid_task_change_prob=0.30,
+                                   navigation_mode=True, enable_deadlines=True,
+                                   adversarial_sampling_prob=0.25))

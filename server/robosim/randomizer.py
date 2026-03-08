@@ -48,6 +48,10 @@ class ScenarioConfig:
 
     # Object positions on the table (x, y) — workspace is roughly ±0.25
     positions: dict[str, tuple] = field(default_factory=dict)
+    # Hidden traits, revealed via scan or proximity.
+    hidden_traits: dict[str, str] = field(default_factory=dict)
+    # Optional deadlines in steps for selected target objects.
+    deadlines: dict[str, int] = field(default_factory=dict)
 
 
 def randomize_scenario(
@@ -113,9 +117,18 @@ def randomize_scenario(
 
     # Constraint
     constraint = random.choice(CONSTRAINTS)
+    hidden_traits = {}
+    for obj in targets_list:
+        # Keep trait labels simple and interpretable for LLM reasoning.
+        hidden_traits[obj] = random.choice(["fragile", "heavy", "standard"])
+
+    deadlines = {}
+    if targets_list and random.random() < 0.6:
+        urgent_obj = random.choice(targets_list)
+        deadlines[urgent_obj] = random.randint(5, 10)
 
     # Generate instruction
-    instruction = _build_instruction(target_bins, constraint)
+    instruction = _build_instruction(target_bins, constraint, hidden_traits, deadlines)
 
     return ScenarioConfig(
         objects=present,
@@ -125,10 +138,13 @@ def randomize_scenario(
         constraint=constraint,
         instruction=instruction,
         positions=positions,
+        hidden_traits=hidden_traits,
+        deadlines=deadlines,
     )
 
 
-def _build_instruction(target_bins: dict[str, str], constraint: Optional[str]) -> str:
+def _build_instruction(target_bins: dict[str, str], constraint: Optional[str],
+                       hidden_traits: dict[str, str], deadlines: dict[str, int]) -> str:
     parts = []
     for obj, bin_ in target_bins.items():
         color = OBJECT_COLORS.get(obj, obj.replace("_block", ""))
@@ -145,5 +161,13 @@ def _build_instruction(target_bins: dict[str, str], constraint: Optional[str]) -
         base += " Move heavy items last."
     elif constraint == "urgent_first":
         base += " Prioritize urgent items first."
+
+    if deadlines:
+        for obj, step in deadlines.items():
+            color = OBJECT_COLORS.get(obj, obj.replace("_block", ""))
+            base += f" Place the {color} block by step {step}."
+
+    if hidden_traits:
+        base += " Some object traits are hidden until you inspect the scene."
 
     return base
