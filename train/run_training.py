@@ -34,6 +34,10 @@ METRICS_JSONL = os.environ.get("METRICS_JSONL", "./logs/train_metrics.jsonl")
 TRAIN_DIFFICULTY = os.environ.get("TRAIN_DIFFICULTY", "easy").strip().lower()
 EVAL_EPISODES = int(os.environ.get("EVAL_EPISODES", "100"))
 FIXED_EVAL_SEED = int(os.environ.get("FIXED_EVAL_SEED", "1337"))
+GRPO_BATCH_SIZE = int(os.environ.get("GRPO_BATCH_SIZE", "4"))
+GRPO_GRAD_ACCUM = int(os.environ.get("GRPO_GRAD_ACCUM", "4"))
+GRPO_NUM_GENERATIONS = int(os.environ.get("GRPO_NUM_GENERATIONS", "4"))
+GRPO_MAX_COMPLETION_LENGTH = int(os.environ.get("GRPO_MAX_COMPLETION_LENGTH", "12"))
 
 CFG_BY_NAME = {
     "easy": EnvConfig.easy,
@@ -459,11 +463,11 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
 grpo_config = GRPOConfig(
     output_dir='./outputs/grpo',
     num_train_epochs=1,
-    per_device_train_batch_size=4,
-    gradient_accumulation_steps=4,
+    per_device_train_batch_size=GRPO_BATCH_SIZE,
+    gradient_accumulation_steps=GRPO_GRAD_ACCUM,
     learning_rate=1e-5,
-    num_generations=4,
-    max_completion_length=12,
+    num_generations=GRPO_NUM_GENERATIONS,
+    max_completion_length=GRPO_MAX_COMPLETION_LENGTH,
     temperature=0.85,
     logging_steps=5,
     save_steps=400,
