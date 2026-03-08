@@ -51,7 +51,7 @@ def metrics():
 
 _demo_env = None
 _policy_pipe = None
-_POLICY_MODEL = os.environ.get("DEMO_POLICY_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+_POLICY_MODEL = os.environ.get("DEMO_POLICY_MODEL", "jshah13/robo-replan-grpo")
 _VALID_ACTIONS = [a.value for a in EnvAction]
 
 
