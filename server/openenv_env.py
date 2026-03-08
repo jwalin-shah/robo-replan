@@ -178,7 +178,7 @@ class RoboReplanEnv(Environment[RoboAction, RoboObservation, RoboState]):
         info = info or {}
         visible = [
             {"name": o.name, "reachable": o.reachable,
-             "blocking": o.blocking, "in_bin": None}
+             "blocking": o.blocking, "in_bin": o.in_bin, "is_held": o.is_held}
             for o in obs.visible_objects
         ]
         robo = RoboObservation(

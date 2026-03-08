@@ -29,6 +29,8 @@ class ObjectInfo(BaseModel):
     reachable: bool
     location: Optional[str] = None
     blocking: Optional[str] = None
+    in_bin: Optional[str] = None
+    is_held: bool = False
 
 
 class Observation(BaseModel):

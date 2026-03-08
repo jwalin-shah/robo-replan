@@ -502,6 +502,8 @@ class TabletopPlanningEnv:
                 reachable=reachable,
                 location="unknown" if not reachable else "table",
                 blocking=obj.blocking,
+                in_bin=obj.in_bin,
+                is_held=obj.is_held,
             ))
 
         # Recent action history

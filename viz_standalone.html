@@ -150,6 +150,11 @@
         <button onclick="togglePlay()" id="play-btn">▶ Run Agent</button>
         <button onclick="modelStep()" id="model-btn">🤖 Model Step</button>
         <button class="danger" onclick="stopAll()">■ Stop</button>
+        <select id="difficulty">
+          <option value="easy">Easy</option>
+          <option value="medium" selected>Medium</option>
+          <option value="hard">Hard</option>
+        </select>
         <select id="speed">
           <option value="700">Slow</option>
           <option value="350" selected>Normal</option>
@@ -177,7 +182,7 @@ const INSTRUCTIONS = [
 ];
 const MAX_STEPS = 20;
 const URL_PARAMS = new URLSearchParams(window.location.search);
-const DIFFICULTY = (URL_PARAMS.get('difficulty') || 'medium').toLowerCase();
+let ACTIVE_DIFFICULTY = (URL_PARAMS.get('difficulty') || 'medium').toLowerCase();
 
 function makeObject(name, x, y, reachable, blocking) {
   return { name, x, y, reachable, blocking: blocking||null, inBin: null, isHeld: false };
@@ -187,7 +192,7 @@ class Env {
   constructor() { this.reset(); }
 
   reset() {
-    this.navMode = (DIFFICULTY === 'hard');
+    this.navMode = (ACTIVE_DIFFICULTY === 'hard');
     const blocked = Math.random() < 0.5;
     this.objects = {
       red_block:   makeObject('red_block',   0.10, 0.00, !blocked, null),
@@ -428,6 +433,18 @@ class Env {
 //  Scripted agent
 // ─────────────────────────────────────────────────────────────────────
 function scriptedAgent(obs) {
+  const valid = new Set(obs.validActions || []);
+  const pickFirst = ['PICK','CLEAR_BLOCKER','PLACE_BIN_A','PLACE_BIN_B',
+    'MOVE_TO_RED','MOVE_TO_BLUE','MOVE_TO_GREEN','MOVE_TO_YELLOW','MOVE_TO_PURPLE',
+    'MOVE_NORTH','MOVE_SOUTH','MOVE_EAST','MOVE_WEST','ROTATE_LEFT','ROTATE_RIGHT','SCAN_SCENE'];
+  // In backend-driven mode, always stay within valid actions.
+  if (obs.validActions && obs.validActions.length) {
+    for (const a of pickFirst) {
+      if (valid.has(a)) return a;
+    }
+    return obs.validActions[0];
+  }
+
   const failures  = new Set(obs.knownFailures);
   const reachable = {};
   obs.visibleObjects.forEach(o => reachable[o.name] = o.reachable);
@@ -661,8 +678,9 @@ const ACTIONS = [
   'PICK','PLACE_BIN_A','PLACE_BIN_B','CLEAR_BLOCKER'
 ];
 
-let env = new Env();
+let env = new Env(); // fallback only if backend unavailable
 let currentObs = null;
+let currentDone = false;
 let totalReward = 0;
 let stepCount   = 0;
 let episodeCount = 1;
@@ -672,6 +690,76 @@ let playTimer = null;
 let modelBusy = false;
 let recentActions = [];
 let recentRewards = [];
+let backendHealthy = true;
+const OBJECT_LAYOUT = {
+  red_block: { x: 0.10, y: 0.00 },
+  blue_block: { x: 0.00, y: 0.00 },
+  green_block: { x: -0.10, y: 0.00 },
+  yellow_block: { x: 0.20, y: 0.06 },
+  purple_block: { x: -0.20, y: 0.06 },
+};
+
+function parseCell(cellStr) {
+  if (!cellStr || typeof cellStr !== 'string' || !cellStr.includes(',')) return [0, 0.25];
+  const [xs, ys] = cellStr.split(',');
+  const x = Number(xs), y = Number(ys);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return [0, 0.25];
+  return [x * 0.1, y * 0.1];
+}
+
+function normalizeObs(raw) {
+  const obs = {
+    instruction: raw.instruction || '—',
+    stepsRemaining: raw.steps_remaining ?? 0,
+    visibleObjects: raw.visible_objects || [],
+    holding: raw.holding || null,
+    completedSubgoals: raw.completed_subgoals || [],
+    knownFailures: raw.known_failures || [],
+    activeConstraints: raw.active_constraints || [],
+    actionHistory: raw.action_history || [],
+    lastAction: raw.last_action || null,
+    lastResult: raw.last_result || null,
+    validActions: raw.valid_actions || [],
+    goalProgress: raw.goal_progress ?? 0,
+    goalsRemaining: raw.goals_remaining ?? 0,
+    navMode: !!raw.nav_mode,
+    gripperCell: raw.gripper_cell || null,
+    gripperFacing: raw.gripper_facing || null,
+    _objects: {},
+    _gripperX: 0,
+    _gripperY: 0.25,
+  };
+  const [gx, gy] = parseCell(obs.gripperCell);
+  obs._gripperX = gx;
+  obs._gripperY = gy;
+  for (const o of obs.visibleObjects) {
+    const base = OBJECT_LAYOUT[o.name] || { x: 0, y: 0 };
+    obs._objects[o.name] = {
+      name: o.name,
+      x: base.x,
+      y: base.y,
+      reachable: !!o.reachable,
+      blocking: o.blocking || null,
+      inBin: o.in_bin || null,
+      isHeld: !!o.is_held || (obs.holding === o.name),
+    };
+  }
+  return obs;
+}
+
+async function apiReset() {
+  const resp = await fetch(`/demo/reset?difficulty=${encodeURIComponent(ACTIVE_DIFFICULTY)}`, { method: 'POST' });
+  if (!resp.ok) throw new Error(`reset failed ${resp.status}`);
+  const data = await resp.json();
+  return { observation: normalizeObs(data.observation), reward: data.reward ?? 0, done: !!data.done };
+}
+
+async function apiStep(action) {
+  const resp = await fetch(`/demo/step?action=${encodeURIComponent(action)}`, { method: 'POST' });
+  if (!resp.ok) throw new Error(`step failed ${resp.status}`);
+  const data = await resp.json();
+  return { observation: normalizeObs(data.observation), reward: data.reward ?? 0, done: !!data.done };
+}
 
 function renderManualButtons(validActions) {
   const grid = document.getElementById('manual-grid');
@@ -689,6 +777,7 @@ function renderManualButtons(validActions) {
 
 function updateUI(obs, reward, done) {
   currentObs = obs;
+  currentDone = !!done;
   document.getElementById('instruction').textContent = obs.instruction;
   document.getElementById('steps').textContent = obs.stepsRemaining;
   document.getElementById('reward').textContent  = totalReward.toFixed(2);
@@ -764,7 +853,7 @@ function updateUI(obs, reward, done) {
   const ds = document.getElementById('done-sec');
   if (done) {
     ds.style.display = '';
-    const win = env._allGoalsDone();
+    const win = (obs.goalProgress || 0) >= 1.0;
     if (win) successCount++;
     document.getElementById('successes').textContent = successCount;
     document.getElementById('done-txt').textContent =
@@ -780,20 +869,47 @@ function updateUI(obs, reward, done) {
 }
 
 function resetEp() {
+  resetEpAsync();
+}
+
+async function resetEpAsync() {
   stopAll();
   totalReward = 0; stepCount = 0; episodeCount++;
   recentActions = [];
   recentRewards = [];
   document.getElementById('log').innerHTML = '';
-  const obs = env.reset();
-  document.getElementById('done-sec').style.display = 'none';
-  updateUI(obs, 0, false);
+  try {
+    const r = await apiReset();
+    backendHealthy = true;
+    document.getElementById('done-sec').style.display = 'none';
+    updateUI(r.observation, 0, false);
+  } catch (e) {
+    backendHealthy = false;
+    const obs = env.reset();
+    document.getElementById('done-sec').style.display = 'none';
+    updateUI(obs, 0, false);
+  }
 }
 
 function manualStep(action) {
-  if (env.done) { resetEp(); return; }
-  const r = env.step(action);
-  totalReward += r.reward; stepCount++;
+  manualStepAsync(action);
+}
+
+async function manualStepAsync(action) {
+  if (currentDone) { await resetEpAsync(); return; }
+  let r;
+  if (backendHealthy) {
+    try {
+      r = await apiStep(action);
+    } catch (e) {
+      backendHealthy = false;
+    }
+  }
+  if (!backendHealthy) {
+    r = env.step(action);
+  }
+  totalReward += r.reward;
+  stepCount++;
   updateUI(r.observation, r.reward, r.done);
 }
 
@@ -842,9 +958,9 @@ async function modelStep() {
     });
     const data = await resp.json();
     const action = data.action || 'SCAN_SCENE';
-    manualStep(action);
+    await manualStepAsync(action);
   } catch (e) {
-    manualStep('SCAN_SCENE');
+    await manualStepAsync('SCAN_SCENE');
   } finally {
     modelBusy = false;
     btn.textContent = prev;
@@ -853,16 +969,16 @@ async function modelStep() {
 
 async function playLoop() {
   if (!playing) return;
-  if (env.done) { await new Promise(res=>setTimeout(res,600)); resetEp(); return; }
+  if (currentDone) { await new Promise(res=>setTimeout(res,600)); await resetEpAsync(); return; }
   const action = scriptedAgent(currentObs);
-  const r = env.step(action);
-  totalReward += r.reward; stepCount++;
-  updateUI(r.observation, r.reward, r.done);
-  if (!r.done && playing) {
+  await manualStepAsync(action);
+  if (currentDone) {
+    if (playing) playTimer = setTimeout(playLoop, 1000);
+    return;
+  }
+  if (playing) {
     const delay = parseInt(document.getElementById('speed').value);
     playTimer = setTimeout(playLoop, delay);
-  } else if (r.done && playing) {
-    playTimer = setTimeout(playLoop, 1000); // auto-reset after 1s
   }
 }
 
@@ -877,9 +993,14 @@ function stopAll() {
   document.getElementById('play-btn').textContent='▶ Run Agent';
 }
 
+document.getElementById('difficulty').value = ACTIVE_DIFFICULTY;
+document.getElementById('difficulty').addEventListener('change', async (e) => {
+  ACTIVE_DIFFICULTY = e.target.value;
+  await resetEpAsync();
+});
+
 // init
-const obs = env.reset();
-updateUI(obs, 0, false);
+resetEpAsync();
 </script>
 </body>
 </html>
