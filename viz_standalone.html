@@ -46,6 +46,8 @@
     .stat .label { font-size: 0.62rem; color: #666; text-transform: uppercase; }
     .stat .value { font-size: 1.1rem; color: #c0d8f8; }
     .controls { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 4px; }
+    .diff-controls { display: flex; gap: 6px; margin-top: 8px; }
+    .diff-btn.active { background: #2a5a8a; border-color: #4a8ad0; color: #cfe6ff; }
     button {
       background: #252535; border: 1px solid #444; color: #ccc;
       padding: 5px 12px; border-radius: 6px; cursor: pointer;
@@ -150,17 +152,17 @@
         <button onclick="togglePlay()" id="play-btn">▶ Run Agent</button>
         <button onclick="modelStep()" id="model-btn">🤖 Model Step</button>
         <button class="danger" onclick="stopAll()">■ Stop</button>
-        <select id="difficulty">
-          <option value="easy">Easy</option>
-          <option value="medium" selected>Medium</option>
-          <option value="hard">Hard</option>
-        </select>
         <select id="speed">
           <option value="700">Slow</option>
           <option value="350" selected>Normal</option>
           <option value="120">Fast</option>
           <option value="20">Max</option>
         </select>
+      </div>
+      <div class="diff-controls">
+        <button id="diff-easy" class="diff-btn" onclick="setDifficulty('easy')">Easy</button>
+        <button id="diff-medium" class="diff-btn" onclick="setDifficulty('medium')">Medium</button>
+        <button id="diff-hard" class="diff-btn" onclick="setDifficulty('hard')">Hard</button>
       </div>
       <h2 style="margin-top:10px">Manual Actions</h2>
       <div class="manual-grid" id="manual-grid"></div>
@@ -1009,13 +1011,23 @@ function stopAll() {
   document.getElementById('play-btn').textContent='▶ Run Agent';
 }
 
-document.getElementById('difficulty').value = ACTIVE_DIFFICULTY;
-document.getElementById('difficulty').addEventListener('change', async (e) => {
-  ACTIVE_DIFFICULTY = e.target.value;
+function renderDifficultyButtons() {
+  ['easy', 'medium', 'hard'].forEach((d) => {
+    const el = document.getElementById(`diff-${d}`);
+    if (!el) return;
+    if (d === ACTIVE_DIFFICULTY) el.classList.add('active');
+    else el.classList.remove('active');
+  });
+}
+
+async function setDifficulty(level) {
+  ACTIVE_DIFFICULTY = level;
+  renderDifficultyButtons();
   await resetEpAsync();
-});
+}
 
 // init
+renderDifficultyButtons();
 resetEpAsync();
 </script>
 </body>
