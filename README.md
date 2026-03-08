@@ -78,8 +78,8 @@ Every step the agent sees: task instruction, scene state, held object, completed
 | Level | Objects | Blockers | Realism | Oracle Success |
 |---|---|---|---|---|
 | **Easy** | 2–5 | 0–1 | None | **100%** |
-| **Medium** | 2–5 | 0–2 | Grasp slip (15%), partial clear (20%), perception noise (10%), hidden objects (30%) | **99%** |
-| **Hard** | 2–5 | 0–3 | All medium + object drift (2%), deadlines, mid-task instruction changes (30%) | **~60%** |
+| **Medium** | 2–5 | 0–2 | Grasp slip (15%), partial clear (20%), perception noise (10%), hidden objects (30%) | **~98%** |
+| **Hard** | 2–5 | 0–3 | All medium + object drift (2%), deadlines, mid-task instruction changes (30%) | **~78%** |
 
 The curriculum auto-advances when rolling success ≥ 75% across 20 episodes, and retreats if it drops below 35%.
 
@@ -176,13 +176,30 @@ Every episode randomizes: which objects appear (2–5), which are targets (1–2
 - **Open source**: this repository
 - **OpenEnv**: uses `openenv-core==0.2.1`
 - **HF Space**: `openenv-community/robo-replan`
-- **Training**: GRPO-only via `train/run_training.py` (TRL + HuggingFace Transformers)
+- **Training**: GRPO-only via `train/run_training.py` or Unsloth pipeline `train/unsloth_train.py` (TRL + HuggingFace Transformers)
 - **Problem statement**: 3.1 — World Modeling, Professional Tasks
 
 ### Submission evidence
 
-- Oracle baseline: 100% easy, 99% medium, ~60% hard
+- Oracle baseline: 100% easy, ~98% medium, ~78% hard
 - Trained policy: 100% easy, ~95% medium (see training logs)
 - Failure trajectory (pre-training): model scans repeatedly, ignores blocker, times out
 - Success trajectory (post-training): model identifies blocker, clears it, picks and places correctly
 - Space links: `/health` · `/schema` · `/viz`
+
+---
+
+## Hackathon Judging Criteria — How We Meet Them
+
+| Criterion | Weight | What we provide |
+|-----------|--------|------------------|
+| **Environment Innovation** | 40% | **Novel & challenging**: Tabletop planning with blockers, grasp slip, partial observability, mid-task instruction changes, deadlines, and constraints (fragile-first, etc.). The agent must *replan* — not just execute a fixed plan — so it meaningfully tests world modeling and belief updates. Three-level curriculum (easy → medium → hard) with increasing realism. |
+| **Storytelling** | 30% | **Clear problem & demo**: README states the problem (LLMs fail at replanning), what the env tests (blockers, recovery, constraints, mid-task change), and how to use the Space. The `/viz` UI shows instruction, scene objects (blocked vs hidden), valid actions, and action log so the demo is easy to follow. Before/after reasoning examples in README show the agent learning to say "Red block is blocked by blue… CLEAR_BLOCKER". |
+| **Training script showing improvement** | 20% | **Observable evidence**: (1) Training writes `logs/train_metrics_unsloth.jsonl` (or `logs/train_metrics.jsonl`) per batch. (2) End of run produces `logs/training_curve_unsloth.png` — reward curve + before/after success-rate bar chart. (3) Console prints baseline vs post-GRPO success rate and avg reward. To plot from an existing metrics file: `python scripts/plot_training_curve.py`. Include the curve image in the Space description or README to show improvement. |
+| **Reward and training pipeline** | 10% | **Coherent reward**: Reward table in README; training uses env reward (task complete, correct placement, penalties for wrong bin, repeated failure, constraint violation). GRPO/Unsloth pipeline: oracle data → SFT warm-start → GRPO online RL; reward is computed by stepping the real env per completion so improvement in inference (how the agent acts) is measurable. |
+
+**Demo checklist for judges**
+
+1. **Environment**: Open the Space → Reset → try Manual Actions: if a block is *blocked*, use CLEAR_BLOCKER first; then MOVE_TO_&lt;color&gt; then PICK. Buttons disable when invalid so the flow is clear.
+2. **Training evidence**: Point to `logs/training_curve_unsloth.png` (or run `train/unsloth_train.py` / `train/run_training.py` and show the printed before/after and saved plot).
+3. **Story**: "Agents must replan when something blocks the target or the instruction changes; RoboReplan trains them to clear blockers and recover from failures."
