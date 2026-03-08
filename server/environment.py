@@ -49,7 +49,7 @@ class TabletopPlanningEnv:
             return False
         gx, gy = self._gripper_cell()
         ox, oy = oc
-        return abs(gx - ox) + abs(gy - oy) <= 1
+        return abs(gx - ox) + abs(gy - oy) <= 2
 
     def _is_facing_object(self, obj_name: str) -> bool:
         oc = self._object_cell(obj_name)
@@ -162,17 +162,17 @@ class TabletopPlanningEnv:
         return lines
 
     def _nav_step_toward(self, target: tuple[int, int]) -> str:
+        """Navigate one step toward target. Stop one cell away so PICK can reach."""
         gx, gy = self._gripper_cell()
         tx, ty = target
-        if tx > gx:
-            return "MOVE_EAST"
-        if tx < gx:
-            return "MOVE_WEST"
-        if ty > gy:
-            return "MOVE_NORTH"
-        if ty < gy:
-            return "MOVE_SOUTH"
-        return "SCAN_SCENE"
+        dx, dy = tx - gx, ty - gy
+        # Already adjacent (Manhattan ≤ 1) — no need to move closer
+        if abs(dx) + abs(dy) <= 1:
+            return "SCAN_SCENE"
+        # Move along the longer axis first
+        if abs(dx) >= abs(dy):
+            return "MOVE_EAST" if dx > 0 else "MOVE_WEST"
+        return "MOVE_NORTH" if dy > 0 else "MOVE_SOUTH"
 
     # ── Public interface ────────────────────────────────────────────────
 
@@ -642,11 +642,17 @@ class TabletopPlanningEnv:
                 return f"PLACE_BIN_{target_bin}"
             return "PLACE_BIN_A"
 
-        # Failed to reach a target → clear
+        # Failed to reach a target → clear or re-navigate
         if any(f.startswith("MOVE_TO") and "FAILED_BLOCKED" in f for f in failures) and can_clear_now():
             return "CLEAR_BLOCKER"
-        if "PICK:FAILED_EMPTY" in failures and can_clear_now():
-            return "CLEAR_BLOCKER"
+        # PICK:FAILED_EMPTY means gripper is not adjacent to anything pickable.
+        # In nav mode, re-navigate to the next target instead of looping on CLEAR_BLOCKER.
+        if "PICK:FAILED_EMPTY" in failures:
+            if self._nav_enabled():
+                # Fall through to the placement-order loop below which will nav correctly.
+                pass
+            elif can_clear_now():
+                return "CLEAR_BLOCKER"
 
         # Work through required placements in order
         for obj_name, bin_name in self._required_placements.items():

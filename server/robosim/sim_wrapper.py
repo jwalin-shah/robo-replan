@@ -281,7 +281,7 @@ class SimWrapper:
             ))
             for _, obj in candidates:
                 dist = np.linalg.norm(s.gripper_pos[:2] - obj.pos[:2])
-                if dist < 0.15:
+                if dist < 0.25:
                     obj.is_held = True
                     s.holding = obj.name
                     s.gripper_open = False
