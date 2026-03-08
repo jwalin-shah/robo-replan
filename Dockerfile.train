@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python deps (training stack). PyTorch 2.6+ required for TRL (FSDPModule in torch.distributed.fsdp)
+# Layer order for cache: deps first (change rarely), then code (change often)
 COPY pyproject.toml .
 RUN pip3 install --no-cache-dir \
     "torch>=2.6.0" --index-url https://download.pytorch.org/whl/cu121 \
@@ -20,17 +20,20 @@ RUN pip3 install --no-cache-dir \
     pydantic numpy "openenv-core==0.2.1" \
     sentencepiece safetensors
 
-# Copy env + training code (run_training imports server)
 COPY server/ server/
 COPY train/ train/
 COPY scripts/ scripts/
 
+RUN mkdir -p /app/logs /app/outputs
+
+# Defaults: faster run (fewer episodes, fast mode). Override in job env or CMD.
 ENV MODEL_NAME=Qwen/Qwen2.5-1.5B-Instruct
 ENV TRAIN_DIFFICULTY=easy
 ENV METRICS_JSONL=/app/logs/train_metrics.jsonl
+ENV FAST_MODE=1
+ENV ORACLE_EPISODES=400
+ENV BASELINE_EPISODES=20
+ENV FINAL_EVAL_EPISODES=20
 
-RUN mkdir -p /app/logs /app/outputs
-
-# Run training (from repo root so server/ and train/ are on path)
 CMD ["bash", "-c", "cd /app && python3 train/run_training.py"]
 # Or use the wrapper: CMD ["bash", "train/run_h100_1.5b.sh"]

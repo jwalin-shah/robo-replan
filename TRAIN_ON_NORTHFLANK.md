@@ -98,6 +98,25 @@ Make sure the repo has **Dockerfile.train** and that **train/** and **scripts/**
 
 If a run **Failed**, open it and read the **Logs** tab (or the API logs); the last stderr lines usually show the exception (e.g. `FSDPModule` import = PyTorch/TRL version mismatch; fixed by pinning PyTorch 2.6+ in Dockerfile.train).
 
+## Making it all work faster
+
+**Build faster**
+- Northflank caches image layers; the Dockerfile is ordered so pip install is cached and only code (server/train/scripts) changes trigger a short rebuild.
+- Rebuild only when you change code or deps; otherwise just click **Run** (reuses last image).
+
+**Training run faster**
+- The image defaults to **FAST_MODE=1**, **ORACLE_EPISODES=400**, and smaller baseline/final evals so a single run finishes in tens of minutes instead of hours.
+- For an even quicker test, override the job command to e.g. `ORACLE_EPISODES=100 python3 train/run_training.py` (in Northflank: Run → Command override).
+- Use **0.5B** model for faster steps: set env `MODEL_NAME=Qwen/Qwen2.5-0.5B-Instruct` on the job.
+
+**One command from your machine**
+- From repo root, run:
+  ```bash
+  bash scripts/build_and_run_training.sh
+  ```
+  This pushes to `main`, triggers a build, waits for it to succeed (up to 15 min), then triggers a run. So you don’t have to open Northflank or click Build then Run.
+- To only trigger build and run without waiting: `bash scripts/build_and_run_training.sh --no-wait` (run may fail with “no successful build” if the build isn’t done yet).
+
 ## Optional: shorter run for testing
 
 To test the job quickly, you can override the command when running the job (in Northflank UI: Run → Command override) to something like:
