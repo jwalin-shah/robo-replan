@@ -48,7 +48,7 @@ class RoboState(RoboObservation):
 SYSTEM = (
     "You are a robot planning agent on a tabletop. "
     "Complete manipulation tasks by choosing ONE action per step.\n\n"
-    "Actions: SCAN_SCENE | MOVE_TO_<COLOR> | PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER\n\n"
+    "Actions: SCAN_SCENE | MOVE_TO_RED | MOVE_TO_BLUE | MOVE_TO_GREEN | MOVE_TO_YELLOW | MOVE_TO_PURPLE | PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER\n\n"
     "Think step by step inside <think>...</think> tags, then output ONLY the action name.\n"
     "Example:\n"
     "<think>Red block is blocked by blue. I must clear blue first, then pick red, then place in bin A.</think>\n"

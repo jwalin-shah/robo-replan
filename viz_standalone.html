@@ -16,7 +16,7 @@
       gap: 20px;
     }
     h1 { color: #7eb8f7; font-size: 1.2rem; letter-spacing: 0.05em; }
-    .layout { display: flex; gap: 24px; align-items: flex-start; width: 100%; max-width: 960px; }
+    .layout { display: flex; gap: 24px; align-items: flex-start; width: 100%; max-width: 1280px; }
     .canvas-wrap {
       background: #1a1a24; border: 1px solid #333; border-radius: 8px;
       padding: 16px; flex-shrink: 0;
@@ -77,8 +77,15 @@
 <h1>Tabletop Planning Environment — Standalone Visualization</h1>
 
 <div class="layout">
-  <div class="canvas-wrap">
-    <canvas id="canvas" width="400" height="400"></canvas>
+  <div style="display:flex;flex-direction:column;gap:10px;">
+    <div class="canvas-wrap">
+      <div style="font-size:0.65rem;color:#555;margin-bottom:6px;">TOP-DOWN VIEW &nbsp;•&nbsp; ⊕ gripper &nbsp;•&nbsp; × blocked</div>
+      <canvas id="canvas" width="400" height="340"></canvas>
+    </div>
+    <div class="canvas-wrap">
+      <div style="font-size:0.65rem;color:#555;margin-bottom:6px;">SIDE VIEW &nbsp;•&nbsp; shows stacking / blocking relationships</div>
+      <canvas id="canvas-side" width="400" height="140"></canvas>
+    </div>
   </div>
 
   <div class="panel">
@@ -159,6 +166,8 @@ const INSTRUCTIONS = [
   "Place the red block in bin A.",
   "Place the red block in bin A. Fragile items first.",
   "Place the red block in bin A, then the green block in bin B.",
+  "Place the yellow block in bin B.",
+  "Place the purple block in bin A, then the red block in bin B.",
 ];
 const MAX_STEPS = 20;
 
@@ -175,6 +184,8 @@ class Env {
       red_block:   makeObject('red_block',   0.10, 0.00, !blocked, null),
       blue_block:  makeObject('blue_block',  0.00, 0.00, true,  blocked ? 'red_block' : null),
       green_block: makeObject('green_block',-0.10, 0.00, true,  null),
+      yellow_block: makeObject('yellow_block', 0.20, 0.06, true, null),
+      purple_block: makeObject('purple_block', -0.20, 0.06, true, null),
     };
     this.gripperX = 0.00;
     this.gripperY = 0.25;
@@ -188,7 +199,10 @@ class Env {
     if (this.instruction.includes('Fragile')) this.activeConstraints.push('fragile_first');
     this.requiredPlacements = {};
     if (this.instruction.includes('red block in bin A')) this.requiredPlacements['red_block'] = 'A';
+    if (this.instruction.includes('red block in bin B')) this.requiredPlacements['red_block'] = 'B';
     if (this.instruction.includes('green block in bin B')) this.requiredPlacements['green_block'] = 'B';
+    if (this.instruction.includes('yellow block in bin B')) this.requiredPlacements['yellow_block'] = 'B';
+    if (this.instruction.includes('purple block in bin A')) this.requiredPlacements['purple_block'] = 'A';
     return this._obs(null, null);
   }
 
@@ -207,8 +221,14 @@ class Env {
     const o = this.objects;
     if (action === 'SCAN_SCENE') return 'SUCCESS';
 
-    if (['MOVE_TO_RED','MOVE_TO_BLUE','MOVE_TO_GREEN'].includes(action)) {
-      const map = { MOVE_TO_RED:'red_block', MOVE_TO_BLUE:'blue_block', MOVE_TO_GREEN:'green_block' };
+    if (['MOVE_TO_RED','MOVE_TO_BLUE','MOVE_TO_GREEN','MOVE_TO_YELLOW','MOVE_TO_PURPLE'].includes(action)) {
+      const map = {
+        MOVE_TO_RED:'red_block',
+        MOVE_TO_BLUE:'blue_block',
+        MOVE_TO_GREEN:'green_block',
+        MOVE_TO_YELLOW:'yellow_block',
+        MOVE_TO_PURPLE:'purple_block'
+      };
       const name = map[action];
       if (!o[name]) return 'FAILED_INVALID';
       if (!o[name].reachable) return 'FAILED_BLOCKED';
@@ -359,6 +379,8 @@ const COLORS = {
   red_block:   '#e05555',
   blue_block:  '#5599e0',
   green_block: '#55c055',
+  yellow_block:'#d2c343',
+  purple_block:'#9a68d8',
   gripper:     '#f0c36d',
 };
 const BIN_POS = { A: {x:0.18,y:-0.22}, B: {x:-0.18,y:-0.22} };
@@ -464,10 +486,98 @@ function drawScene(obs) {
   ctx.fillText('Top-down view  •  ⊕ gripper  •  × blocked', 8, H-8);
 }
 
+// ── Side view ─────────────────────────────────────────────────────────
+const canvasSide = document.getElementById('canvas-side');
+const ctxS = canvasSide.getContext('2d');
+const SW = canvasSide.width, SH = canvasSide.height;
+
+function drawSideView(obs) {
+  if (!obs) return;
+  ctxS.clearRect(0,0,SW,SH);
+  ctxS.fillStyle = '#1a1a10'; ctxS.fillRect(0,0,SW,SH);
+
+  // Table surface
+  const tableY = SH - 28;
+  ctxS.fillStyle = '#2a2a1a'; ctxS.fillRect(0, tableY, SW, 6);
+  ctxS.strokeStyle = '#554'; ctxS.lineWidth = 1.5;
+  ctxS.beginPath(); ctxS.moveTo(0, tableY); ctxS.lineTo(SW, tableY); ctxS.stroke();
+
+  // Group objects by x position to show stacking
+  const onTable = Object.entries(obs._objects).filter(([n,o]) => !o.inBin && !o.isHeld);
+  const BSIZE = 34;
+  const spacing = Math.min(70, (SW - 40) / Math.max(onTable.length, 1));
+  const startX = SW/2 - (onTable.length-1) * spacing/2;
+
+  onTable.forEach(([name, obj], i) => {
+    const col = COLORS[name] || '#aaa';
+    const blocked = !obj.reachable;
+    const cx = startX + i * spacing;
+
+    // Check if this block is blocking something (draw blocker on top)
+    const isBlocker = obj.blocking;
+    const blockH = BSIZE;
+    let stackY = tableY - blockH;
+
+    if (isBlocker) {
+      // Draw the blocked block first (bottom)
+      const targetCol = COLORS[obj.blocking] || '#aaa';
+      ctxS.fillStyle = targetCol + '44';
+      ctxS.fillRect(cx - BSIZE/2, stackY, BSIZE, blockH);
+      ctxS.strokeStyle = '#444'; ctxS.lineWidth = 1;
+      ctxS.strokeRect(cx - BSIZE/2, stackY, BSIZE, blockH);
+      ctxS.fillStyle = '#888'; ctxS.font = '8px monospace'; ctxS.textAlign = 'center';
+      ctxS.fillText(obj.blocking.replace('_block','').toUpperCase(), cx, stackY + blockH/2 + 3);
+      // X mark
+      ctxS.strokeStyle = '#e06060'; ctxS.lineWidth = 1.5;
+      ctxS.beginPath(); ctxS.moveTo(cx-10, stackY+8); ctxS.lineTo(cx+10, stackY+blockH-8); ctxS.stroke();
+      ctxS.beginPath(); ctxS.moveTo(cx+10, stackY+8); ctxS.lineTo(cx-10, stackY+blockH-8); ctxS.stroke();
+
+      stackY -= blockH; // blocker goes on top
+    }
+
+    // Draw this block
+    ctxS.fillStyle = blocked ? col+'44' : col+'aa';
+    ctxS.fillRect(cx - BSIZE/2, stackY, BSIZE, blockH);
+    ctxS.strokeStyle = isBlocker ? '#f09040' : blocked ? '#444' : col;
+    ctxS.lineWidth = isBlocker ? 2.5 : 1.5;
+    ctxS.strokeRect(cx - BSIZE/2, stackY, BSIZE, blockH);
+
+    // Label
+    ctxS.fillStyle = '#fff'; ctxS.font = 'bold 9px monospace'; ctxS.textAlign = 'center';
+    ctxS.fillText(name.replace('_block','').toUpperCase(), cx, stackY + blockH/2 + 3);
+
+    if (isBlocker) {
+      ctxS.fillStyle = '#f09040'; ctxS.font = '7px monospace';
+      ctxS.fillText('ON TOP', cx, stackY - 4);
+    }
+  });
+
+  // Held block (floating above)
+  const held = Object.entries(obs._objects).find(([n,o]) => o.isHeld);
+  if (held) {
+    const [name] = held;
+    const col = COLORS[name] || '#aaa';
+    ctxS.fillStyle = col+'cc';
+    ctxS.fillRect(SW/2 - BSIZE/2, 8, BSIZE, BSIZE);
+    ctxS.strokeStyle = '#fff'; ctxS.lineWidth = 2;
+    ctxS.strokeRect(SW/2 - BSIZE/2, 8, BSIZE, BSIZE);
+    ctxS.fillStyle = '#fff'; ctxS.font = 'bold 9px monospace'; ctxS.textAlign = 'center';
+    ctxS.fillText(name.replace('_block','').toUpperCase(), SW/2, 8 + BSIZE/2 + 3);
+    ctxS.fillStyle = '#90ffb0'; ctxS.font = '7px monospace';
+    ctxS.fillText('HELD BY GRIPPER', SW/2, 8 + BSIZE + 10);
+  }
+
+  // Bin labels
+  ctxS.fillStyle = BIN_COL.A + 'aa'; ctxS.font = 'bold 10px monospace'; ctxS.textAlign = 'left';
+  ctxS.fillText('BIN A', 6, tableY + 18);
+  ctxS.fillStyle = BIN_COL.B + 'aa'; ctxS.textAlign = 'right';
+  ctxS.fillText('BIN B', SW - 6, tableY + 18);
+}
+
 // ─────────────────────────────────────────────────────────────────────
 //  UI
 // ─────────────────────────────────────────────────────────────────────
-const ACTIONS = ['SCAN_SCENE','MOVE_TO_RED','MOVE_TO_BLUE','MOVE_TO_GREEN','PICK','PLACE_BIN_A','PLACE_BIN_B','CLEAR_BLOCKER'];
+const ACTIONS = ['SCAN_SCENE','MOVE_TO_RED','MOVE_TO_BLUE','MOVE_TO_GREEN','MOVE_TO_YELLOW','MOVE_TO_PURPLE','PICK','PLACE_BIN_A','PLACE_BIN_B','CLEAR_BLOCKER'];
 
 let env = new Env();
 let currentObs = null;
@@ -551,6 +661,7 @@ function updateUI(obs, reward, done) {
   }
 
   drawScene(obs);
+  drawSideView(obs);
 }
 
 function resetEp() {
