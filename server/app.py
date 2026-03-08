@@ -98,6 +98,53 @@ def _fallback_action(valid: list[str]) -> str:
     return valid[0]
 
 
+def _prompt_line(prompt: str, key: str) -> str:
+    m = re.search(rf"{re.escape(key)}:\s*(.*)", prompt, flags=re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+
+def _smart_fallback_action(valid: list[str], prompt: str) -> str:
+    """
+    Use lightweight state cues from prompt to avoid repetitive bad actions.
+    """
+    if not valid:
+        return "SCAN_SCENE"
+    valid_set = set(valid)
+    last_line = _prompt_line(prompt, "Last")
+    holding = _prompt_line(prompt, "Holding").lower()
+
+    last_action, last_result = "", ""
+    m = re.match(r"\s*([A-Z_]+)\s*->\s*([A-Z_]+)", last_line.upper())
+    if m:
+        last_action, last_result = m.group(1), m.group(2)
+
+    # If holding something, prioritize placing over anything else.
+    if holding and holding not in ("nothing", "none", "null"):
+        if "PLACE_BIN_A" in valid_set:
+            return "PLACE_BIN_A"
+        if "PLACE_BIN_B" in valid_set:
+            return "PLACE_BIN_B"
+
+    # If we just moved to a target successfully, then pick.
+    if last_action.startswith("MOVE_TO_") and last_result == "SUCCESS" and "PICK" in valid_set:
+        return "PICK"
+
+    # If pick just failed/was invalid, move or clear first instead of repeating pick.
+    if last_action == "PICK" and last_result.startswith("FAILED"):
+        for a in valid:
+            if a.startswith("MOVE_TO_"):
+                return a
+        if "CLEAR_BLOCKER" in valid_set:
+            return "CLEAR_BLOCKER"
+
+    # In top-down mode, blind PICK tends to loop; prefer moving to a target first.
+    for a in valid:
+        if a.startswith("MOVE_TO_"):
+            return a
+
+    return _fallback_action(valid)
+
+
 def _get_policy_pipe():
     global _policy_pipe
     if _policy_pipe is None:
@@ -197,10 +244,10 @@ def demo_policy_action(req: PolicyActionRequest):
         action = raw_action
         valid = [a for a in req.valid_actions if a in _VALID_ACTIONS] or _parse_valid_actions_from_prompt(req.prompt)
         if valid and action not in valid:
-            action = _fallback_action(valid)
+            action = _smart_fallback_action(valid, req.prompt)
         # Avoid no-op scan loops when other valid actions exist.
         if valid and action == "SCAN_SCENE" and any(v != "SCAN_SCENE" for v in valid):
-            action = _fallback_action([v for v in valid if v != "SCAN_SCENE"])
+            action = _smart_fallback_action([v for v in valid if v != "SCAN_SCENE"], req.prompt)
         return {
             "action": action,
             "raw_output": out,
@@ -210,5 +257,5 @@ def demo_policy_action(req: PolicyActionRequest):
     except Exception as exc:
         # Fail soft so the UI can still run with manual/scripted controls.
         valid = [a for a in req.valid_actions if a in _VALID_ACTIONS] or _parse_valid_actions_from_prompt(req.prompt)
-        action = _fallback_action([v for v in valid if v != "SCAN_SCENE"]) if valid else "SCAN_SCENE"
+        action = _smart_fallback_action([v for v in valid if v != "SCAN_SCENE"], req.prompt) if valid else "SCAN_SCENE"
         return {"action": action, "error": str(exc), "valid_actions_used": valid}
