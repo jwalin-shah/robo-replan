@@ -127,6 +127,18 @@ def json_to_scenario(s: str) -> ScenarioConfig:
     d.setdefault('deadlines', {})
     return ScenarioConfig(**d)
 
+def _to_text(x):
+    if isinstance(x, str):
+        return x
+    if isinstance(x, dict):
+        # GRPO can return chat-like chunks: {"content": "..."} or nested values.
+        if 'content' in x:
+            return _to_text(x['content'])
+        return ' '.join(_to_text(v) for v in x.values())
+    if isinstance(x, (list, tuple)):
+        return ' '.join(_to_text(v) for v in x)
+    return str(x)
+
 def extract_action(text: str):
     clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip().upper()
     clean = re.sub(r'[^A-Z_ ]+', ' ', clean)
@@ -289,9 +301,10 @@ def reward_fn(prompts, completions, scenario, **kwargs):
     batch_rewards = []
 
     for prompt_msgs, completion, scen_str in zip(prompts, completions, scenario):
-        action = extract_action(completion)
+        completion_text = _to_text(completion)
+        action = extract_action(completion_text)
         reasoning = ""
-        m = re.search(r'<think>(.*?)</think>', completion, re.DOTALL)
+        m = re.search(r'<think>(.*?)</think>', completion_text, re.DOTALL)
         if m:
             reasoning = m.group(1).strip()
 
