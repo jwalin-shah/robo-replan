@@ -246,6 +246,38 @@ def extract_reasoning(text: str) -> str:
     m = re.search(r'<think>(.*?)</think>', text, re.DOTALL)
     return m.group(1).strip() if m else ''
 
+def completion_to_text(completion):
+    if isinstance(completion, str):
+        return completion
+    if isinstance(completion, dict):
+        if isinstance(completion.get("content"), str):
+            return completion["content"]
+        if isinstance(completion.get("text"), str):
+            return completion["text"]
+        token_ids = completion.get("token_ids") or completion.get("tokens")
+        if token_ids and isinstance(token_ids, (list, tuple)):
+            try:
+                return tokenizer.decode(token_ids, skip_special_tokens=True)
+            except Exception:
+                return ""
+        return ""
+    if isinstance(completion, list) and completion:
+        first = completion[0]
+        if isinstance(first, dict):
+            if isinstance(first.get("content"), str):
+                return first["content"]
+            if isinstance(first.get("text"), str):
+                return first["text"]
+            token_ids = first.get("token_ids") or first.get("tokens")
+            if token_ids and isinstance(token_ids, (list, tuple)):
+                try:
+                    return tokenizer.decode(token_ids, skip_special_tokens=True)
+                except Exception:
+                    return ""
+        if isinstance(first, str):
+            return first
+    return ""
+
 def parse_prompt_context(prompt_messages):
     user_text = ''
     for msg in prompt_messages or []:
@@ -465,6 +497,7 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             "scan_penalty_scale": 1.0,
             "invalid_pick_scale": 1.0,
             "exception_debug_left": 10,
+            "parse_debug_left": 10,
         }
     reward_fn._calls += 1
 
@@ -485,7 +518,7 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
     history_action_values = kwargs.get("history_actions")
 
     for i, completion in enumerate(completions):
-        text      = completion if isinstance(completion, str) else completion[0].get('content', '')
+        text      = completion_to_text(completion)
         action    = extract_action(text)
         reasoning = extract_reasoning(text)
 
@@ -493,6 +526,15 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             rewards.append(-3.0)
             reward_fn._stats["total"] += 1
             reward_fn._stats["parse_fail"] += 1
+            if reward_fn._stats["parse_debug_left"] > 0:
+                print(
+                    "[parse-debug]",
+                    f"idx={i}",
+                    f"type={type(completion).__name__}",
+                    f"text={repr(text[:120])}",
+                    f"raw={repr(str(completion)[:120])}",
+                )
+                reward_fn._stats["parse_debug_left"] -= 1
             continue
         reward_fn._stats["total"] += 1
         reward_fn._stats["action_counts"][action] = reward_fn._stats["action_counts"].get(action, 0) + 1
