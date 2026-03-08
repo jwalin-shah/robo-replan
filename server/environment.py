@@ -67,6 +67,17 @@ class TabletopPlanningEnv:
         }.get(facing, (0, 1))
         return (dx, dy) == forward
 
+    def _can_pick_object(self, obj_name: str) -> bool:
+        obj = self.sim.get_state().objects.get(obj_name)
+        if obj is None or not obj.reachable or obj.is_held or obj.in_bin is not None:
+            return False
+        if self._nav_enabled():
+            return self._is_adjacent_to(obj_name)
+        gp = self.sim.get_state().gripper_pos
+        dx = float(gp[0]) - float(obj.pos[0])
+        dy = float(gp[1]) - float(obj.pos[1])
+        return (dx * dx + dy * dy) ** 0.5 < 0.15
+
     def _next_goal_cell(self) -> Optional[tuple[int, int]]:
         state = self.sim.get_state()
         for obj_name, bin_name in self._required_placements.items():
@@ -111,9 +122,7 @@ class TabletopPlanningEnv:
             reasons["PLACE_BIN_B"] = "place held object in bin B"
         else:
             for obj in state.objects.values():
-                if not (obj.reachable and not obj.is_held and obj.in_bin is None):
-                    continue
-                if self._nav_enabled() and not self._is_adjacent_to(obj.name):
+                if not self._can_pick_object(obj.name):
                     continue
                 reasons["PICK"] = f"pick reachable object ({obj.name})"
                 break
@@ -513,13 +522,7 @@ class TabletopPlanningEnv:
         else:
             has_pick = False
             for obj in state.objects.values():
-                if not (obj.reachable and not obj.is_held and obj.in_bin is None):
-                    continue
-                if self._nav_enabled():
-                    if self._is_adjacent_to(obj.name):
-                        has_pick = True
-                        break
-                else:
+                if self._can_pick_object(obj.name):
                     has_pick = True
                     break
             if has_pick:
