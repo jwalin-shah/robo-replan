@@ -17,7 +17,7 @@ COPY pyproject.toml .
 RUN pip3 install --no-cache-dir \
     "torch>=2.2.0,<2.6" --index-url https://download.pytorch.org/whl/cu121 \
     && pip3 install --no-cache-dir \
-    "transformers>=4.40" "accelerate>=0.30" "datasets" "trl>=0.14,<0.15" \
+    "transformers>=4.40" "accelerate>=0.30" "datasets" "trl==0.14.0" \
     pydantic numpy "openenv-core==0.2.1" \
     sentencepiece safetensors
 
