@@ -51,6 +51,35 @@ class TabletopPlanningEnv:
         ox, oy = oc
         return abs(gx - ox) + abs(gy - oy) <= 1
 
+    def _is_facing_object(self, obj_name: str) -> bool:
+        oc = self._object_cell(obj_name)
+        if oc is None:
+            return False
+        gx, gy = self._gripper_cell()
+        ox, oy = oc
+        dx, dy = (ox - gx), (oy - gy)
+        facing = self.sim.get_facing()
+        forward = {
+            "N": (0, 1),
+            "S": (0, -1),
+            "E": (1, 0),
+            "W": (-1, 0),
+        }.get(facing, (0, 1))
+        return (dx, dy) == forward
+
+    def _next_goal_cell(self) -> Optional[tuple[int, int]]:
+        state = self.sim.get_state()
+        for obj_name, bin_name in self._required_placements.items():
+            obj = state.objects.get(obj_name)
+            if not obj or obj.in_bin == bin_name:
+                continue
+            if obj.reachable:
+                return self._object_cell(obj_name)
+            for blocker in state.objects.values():
+                if blocker.blocking == obj_name and blocker.reachable and blocker.in_bin is None:
+                    return self._object_cell(blocker.name)
+        return None
+
     def _nav_step_toward(self, target: tuple[int, int]) -> str:
         gx, gy = self._gripper_cell()
         tx, ty = target
@@ -87,7 +116,11 @@ class TabletopPlanningEnv:
                 and not self._done):
             self._apply_mid_task_change()
 
-        raw_result = self.sim.execute(action)
+        valid_now = self._valid_actions()
+        if action not in valid_now:
+            raw_result = "FAILED_INVALID"
+        else:
+            raw_result = self.sim.execute(action)
         result = self._apply_noise(action, raw_result)
 
         if result == "FAILED_SLIP" and raw_result == "SUCCESS" and action == "PICK":
@@ -240,6 +273,12 @@ class TabletopPlanningEnv:
     def _compute_reward(self, action: str, result: str) -> float:
         w = self.cfg.reward
         r = w.step_cost
+
+        if self._nav_enabled():
+            if action in ("MOVE_NORTH", "MOVE_SOUTH", "MOVE_EAST", "MOVE_WEST"):
+                r -= 0.03
+            if action in ("ROTATE_LEFT", "ROTATE_RIGHT"):
+                r -= 0.02
 
         if result not in ("SUCCESS", "PARTIAL_CLEAR"):
             failure_key = f"{action}:{result}"
@@ -535,6 +574,9 @@ class TabletopPlanningEnv:
             remaining = sum(1 for n, b in self._required_placements.items()
                             if not (state.objects.get(n) and state.objects[n].in_bin == b))
             extra["goals_remaining"] = remaining
+        goal_cell = self._next_goal_cell()
+        if goal_cell is not None:
+            extra["next_target_cell"] = f"{goal_cell[0]},{goal_cell[1]}"
 
         return Observation(
             instruction=self._instruction,

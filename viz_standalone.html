@@ -727,6 +727,7 @@ function normalizeObs(raw) {
     navMode: !!raw.nav_mode,
     gripperCell: raw.gripper_cell || null,
     gripperFacing: raw.gripper_facing || null,
+    nextTargetCell: raw.next_target_cell || null,
     _objects: {},
     _gripperX: 0,
     _gripperY: 0.25,
@@ -846,6 +847,7 @@ function updateUI(obs, reward, done) {
     <div class="item con">Top recent action: ${top}</div>
     <div class="item con">Avg recent reward: ${avgRecentReward}</div>
     <div class="item con">Mode: ${obs.navMode ? 'Navigation' : 'Top-Down'}</div>
+    <div class="item con">Next target cell: ${obs.nextTargetCell || 'n/a'}</div>
     <div class="item con">Loop risk: ${loopRisk}</div>
   `;
 

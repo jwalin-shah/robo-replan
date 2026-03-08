@@ -36,6 +36,7 @@ class RoboObservation(Observation):
     nav_mode: bool = False
     gripper_cell: Optional[str] = None
     gripper_facing: Optional[str] = None
+    next_target_cell: Optional[str] = None
     prompt: str                          # pre-built LLM prompt
     mid_task_changed: bool = False
 
@@ -73,7 +74,11 @@ def _build_prompt(obs) -> str:
     progress = f"{obs.goal_progress:.0%}" if obs.goal_progress is not None else "?"
     nav_line = None
     if obs.nav_mode:
-        nav_line = f"Navigation: gripper_cell={obs.gripper_cell or '?'} facing={obs.gripper_facing or '?'}"
+        nav_line = (
+            f"Navigation: gripper_cell={obs.gripper_cell or '?'} "
+            f"facing={obs.gripper_facing or '?'} "
+            f"next_target_cell={obs.next_target_cell or '?'}"
+        )
 
     lines = [
         f"[SYSTEM] {SYSTEM}",
@@ -201,6 +206,7 @@ class RoboReplanEnv(Environment[RoboAction, RoboObservation, RoboState]):
             nav_mode=obs.nav_mode,
             gripper_cell=obs.gripper_cell,
             gripper_facing=obs.gripper_facing,
+            next_target_cell=obs.next_target_cell,
             mid_task_changed=info.get("mid_task_changed", False),
             prompt="",  # fill below
         )

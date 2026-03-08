@@ -60,6 +60,7 @@ class Observation(BaseModel):
     nav_mode: bool = False
     gripper_cell: Optional[str] = None
     gripper_facing: Optional[str] = None
+    next_target_cell: Optional[str] = None
     discovered_traits: Optional[dict[str, str]] = None
     object_deadlines: Optional[dict[str, int]] = None
 
