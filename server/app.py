@@ -73,7 +73,9 @@ def _get_policy_pipe():
         tokenizer.pad_token = tokenizer.eos_token
         model = AutoModelForCausalLM.from_pretrained(_POLICY_MODEL, dtype="auto", device_map="auto")
         model.generation_config.pad_token_id = tokenizer.pad_token_id
-        _policy_pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=20, device_map="auto")
+        # Avoid max_new_tokens/max_length warning spam in server logs.
+        model.generation_config.max_length = None
+        _policy_pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device_map="auto")
     return _policy_pipe
 
 
@@ -131,7 +133,7 @@ def demo_policy_action(req: PolicyActionRequest):
     """
     try:
         pipe = _get_policy_pipe()
-        out = pipe(req.prompt, return_full_text=False)[0]["generated_text"]
+        out = pipe(req.prompt, return_full_text=False, max_new_tokens=20, do_sample=False)[0]["generated_text"]
         action = _extract_action(out)
         return {"action": action, "raw_output": out}
     except Exception as exc:

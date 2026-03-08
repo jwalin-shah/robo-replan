@@ -11,7 +11,8 @@ import random
 import os
 import time
 from datasets import Dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import GRPOTrainer, GRPOConfig
 
 from server.config import EnvConfig
@@ -91,11 +92,15 @@ def scenario_to_json(scen) -> str:
         'blockers': scen.blockers, 'distractors': scen.distractors,
         'constraint': scen.constraint, 'instruction': scen.instruction,
         'positions': {k: list(v) for k, v in scen.positions.items()},
+        'hidden_traits': scen.hidden_traits,
+        'deadlines': scen.deadlines,
     })
 
 def json_to_scenario(s: str) -> ScenarioConfig:
     d = json.loads(s)
     d['positions'] = {k: tuple(v) for k, v in d['positions'].items()}
+    d.setdefault('hidden_traits', {})
+    d.setdefault('deadlines', {})
     return ScenarioConfig(**d)
 
 def extract_action(text: str):
@@ -245,6 +250,8 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
     batch_results = []
     batch_oracles = []
     rewards = []
+    step_values = kwargs.get("step")
+
     for i, completion in enumerate(completions):
         text      = completion if isinstance(completion, str) else completion[0].get('content', '')
         action    = extract_action(text)
@@ -277,6 +284,15 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             eval_env._instruction         = scen.instruction
             eval_env._required_placements = dict(scen.targets)
             eval_env._active_constraints  = [scen.constraint] if scen.constraint else []
+
+            # Reconstruct the exact rollout state for this training row.
+            step_i = int(step_values[i]) if step_values is not None else 0
+            for _ in range(max(0, step_i)):
+                oracle_pre = eval_env._oracle_action() or "SCAN_SCENE"
+                pre = eval_env.step(oracle_pre)
+                if pre.done:
+                    break
+
             oracle_action = eval_env._oracle_action()
             result = eval_env.step(action, reasoning=reasoning)
             shaped_reward = float(result.reward)
@@ -430,16 +446,30 @@ print("GRPO done -> ./outputs/grpo_final")
 print("\n" + "=" * 50)
 print("AFTER TRAINING")
 print("=" * 50)
-
-pipe = pipeline('text-generation', model='./outputs/grpo_final',
-                tokenizer=tokenizer, max_new_tokens=16, device_map='auto')
+eval_model = AutoModelForCausalLM.from_pretrained(
+    './outputs/grpo_final', dtype='auto', device_map='auto'
+)
+eval_model.generation_config.pad_token_id = tokenizer.pad_token_id
 
 def trained_policy(obs):
     messages = [
         {'role': 'system', 'content': SYSTEM},
         {'role': 'user',   'content': obs_to_user_msg(obs)},
     ]
-    out = pipe(messages, return_full_text=False)[0]['generated_text']
+    prompt_text = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    encoded = tokenizer(prompt_text, return_tensors='pt').to(eval_model.device)
+    with torch.no_grad():
+        output_ids = eval_model.generate(
+            **encoded,
+            max_new_tokens=16,
+            do_sample=False,
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+    new_ids = output_ids[0][encoded["input_ids"].shape[1]:]
+    out = tokenizer.decode(new_ids, skip_special_tokens=True)
     return extract_action(out) or random.choice(ACTIONS)
 
 after = eval_policy(trained_policy, n_episodes=50)
