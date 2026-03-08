@@ -23,6 +23,11 @@ from server.robosim.randomizer import ScenarioConfig
 ACTIONS = [a.value for a in Action]
 ACTION_LIST_STR = " | ".join(ACTIONS)
 MODEL   = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-0.5B-Instruct")
+MODEL_FALLBACKS = [
+    MODEL,
+    "Qwen/Qwen2.5-1.5B-Instruct",
+    "Qwen/Qwen2.5-0.5B-Instruct",
+]
 MONITOR_EVERY = int(os.environ.get("MONITOR_EVERY", "25"))
 INCLUDE_VALID_HINT = os.environ.get("INCLUDE_VALID_HINT", "0").lower() in ("1", "true", "yes")
 METRICS_JSONL = os.environ.get("METRICS_JSONL", "./logs/train_metrics.jsonl")
@@ -215,11 +220,29 @@ print(f"Dataset: {len(rows)} steps ({len(dataset['train'])} train, {len(dataset[
 # ── Load model ─────────────────────────────────────────────────────────
 
 print("\nLoading model...")
-tokenizer = AutoTokenizer.from_pretrained(MODEL)
-tokenizer.padding_side = 'left'
-tokenizer.pad_token = tokenizer.eos_token
+load_error = None
+resolved_model = None
+for candidate in MODEL_FALLBACKS:
+    try:
+        print(f"Trying model: {candidate}")
+        tokenizer = AutoTokenizer.from_pretrained(candidate)
+        tokenizer.padding_side = 'left'
+        tokenizer.pad_token = tokenizer.eos_token
+        model = AutoModelForCausalLM.from_pretrained(candidate, dtype='auto', device_map='auto')
+        resolved_model = candidate
+        break
+    except Exception as exc:
+        load_error = exc
+        print(f"Model load failed for {candidate}: {exc}")
+        continue
 
-model = AutoModelForCausalLM.from_pretrained(MODEL, dtype='auto', device_map='auto')
+if resolved_model is None:
+    raise RuntimeError(
+        "Unable to load any candidate model. "
+        f"Requested={MODEL}, tried={MODEL_FALLBACKS}"
+    ) from load_error
+
+print(f"Using model: {resolved_model}")
 model.generation_config.pad_token_id = tokenizer.pad_token_id
 print(f"Loaded on: {next(model.parameters()).device}")
 
