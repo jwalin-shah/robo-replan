@@ -37,6 +37,10 @@ class RoboObservation(Observation):
     gripper_cell: Optional[str] = None
     gripper_facing: Optional[str] = None
     next_target_cell: Optional[str] = None
+    distance_to_next_goal: Optional[int] = None
+    action_preconditions: Optional[dict[str, str]] = None
+    deadline_status: Optional[dict[str, int]] = None
+    observability_map: Optional[list[str]] = None
     prompt: str                          # pre-built LLM prompt
     mid_task_changed: bool = False
 
@@ -71,6 +75,7 @@ def _build_prompt(obs) -> str:
     subgoals = "; ".join(obs.completed_subgoals) or "none yet"
     constraints = "; ".join(obs.active_constraints) or "none"
     valid = ", ".join(obs.valid_actions) if obs.valid_actions else "any"
+    preconditions = "; ".join(f"{k}:{v}" for k, v in (obs.action_preconditions or {}).items()) or "n/a"
     progress = f"{obs.goal_progress:.0%}" if obs.goal_progress is not None else "?"
     nav_line = None
     if obs.nav_mode:
@@ -94,6 +99,9 @@ def _build_prompt(obs) -> str:
         f"Action history: {history}",
         f"Last step: {obs.last_action or 'none'} → {obs.last_result or 'n/a'}",
         f"Valid actions now: {valid}",
+        f"Action preconditions: {preconditions}",
+        f"Distance to next goal: {obs.distance_to_next_goal if obs.distance_to_next_goal is not None else 'n/a'}",
+        f"Deadlines: {obs.deadline_status or {}}",
         f"Steps left: {obs.steps_remaining}",
         "",
         "Next action:",
@@ -207,6 +215,10 @@ class RoboReplanEnv(Environment[RoboAction, RoboObservation, RoboState]):
             gripper_cell=obs.gripper_cell,
             gripper_facing=obs.gripper_facing,
             next_target_cell=obs.next_target_cell,
+            distance_to_next_goal=obs.distance_to_next_goal,
+            action_preconditions=obs.action_preconditions,
+            deadline_status=obs.deadline_status,
+            observability_map=obs.observability_map,
             mid_task_changed=info.get("mid_task_changed", False),
             prompt="",  # fill below
         )

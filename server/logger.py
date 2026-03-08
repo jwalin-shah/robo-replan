@@ -125,6 +125,28 @@ class MetricsTracker:
                 counts[ft] = counts.get(ft, 0) + 1
         return dict(sorted(counts.items(), key=lambda x: -x[1]))
 
+    def failure_taxonomy(self) -> dict[str, int]:
+        tax = {
+            "invalid": 0,
+            "blocked": 0,
+            "empty": 0,
+            "slip": 0,
+            "other": 0,
+        }
+        for k, v in self.failure_breakdown().items():
+            kk = k.upper()
+            if "INVALID" in kk:
+                tax["invalid"] += v
+            elif "BLOCK" in kk:
+                tax["blocked"] += v
+            elif "EMPTY" in kk:
+                tax["empty"] += v
+            elif "SLIP" in kk:
+                tax["slip"] += v
+            else:
+                tax["other"] += v
+        return tax
+
     def reward_curve(self) -> list[float]:
         """Per-episode total reward for plotting."""
         return [e.total_reward for e in self._history]
@@ -142,6 +164,7 @@ class MetricsTracker:
             "rolling_avg_steps": round(self.rolling_avg_steps(), 1),
             "oracle_agreement_rate": round(self.oracle_agreement_rate(), 3),
             "failure_breakdown": self.failure_breakdown(),
+            "failure_taxonomy": self.failure_taxonomy(),
             "reward_curve": self.reward_curve()[-50:],    # last 50 for the chart
             "success_curve": self.success_curve()[-50:],
         }

@@ -61,6 +61,10 @@ class Observation(BaseModel):
     gripper_cell: Optional[str] = None
     gripper_facing: Optional[str] = None
     next_target_cell: Optional[str] = None
+    distance_to_next_goal: Optional[int] = None
+    action_preconditions: Optional[dict[str, str]] = None
+    deadline_status: Optional[dict[str, int]] = None
+    observability_map: Optional[list[str]] = None
     discovered_traits: Optional[dict[str, str]] = None
     object_deadlines: Optional[dict[str, int]] = None
 

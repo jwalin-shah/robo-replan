@@ -59,6 +59,7 @@ def randomize_scenario(
     n_targets: Optional[int] = None,
     n_blockers: Optional[int] = None,
     force_blocked: bool = False,
+    scenario_pack: str = "default",
 ) -> ScenarioConfig:
     """
     Generate a fully randomized scenario.
@@ -69,11 +70,12 @@ def randomize_scenario(
     force_blocked: always have at least one blocker (good for training recovery)
     """
     # Sample object count
+    pack = SCENARIO_PACKS.get(scenario_pack, OBJECT_NAMES)
     total = n_objects or random.randint(2, 5)
-    total = min(total, len(OBJECT_NAMES))
+    total = min(total, len(pack))
 
     # Pick which objects appear
-    present = random.sample(OBJECT_NAMES, total)
+    present = random.sample(pack, total)
 
     # Pick targets (subset of present objects)
     max_targets = min(n_targets or random.randint(1, 2), len(present))
@@ -171,3 +173,9 @@ def _build_instruction(target_bins: dict[str, str], constraint: Optional[str],
         base += " Some object traits are hidden until you inspect the scene."
 
     return base
+SCENARIO_PACKS = {
+    "default": OBJECT_NAMES,
+    "warehouse": ["red_block", "blue_block", "green_block", "yellow_block", "purple_block"],
+    "kitchen": ["yellow_block", "green_block", "red_block", "purple_block", "blue_block"],
+    "assembly": ["blue_block", "red_block", "green_block", "yellow_block", "purple_block"],
+}

@@ -125,6 +125,13 @@ def summarize_judge_story(level_reports: list[LevelReport]) -> dict:
     robustness_signals = {
         "oracle_success_rates": {r.level: round(r.success_rate, 3) for r in level_reports},
         "avg_steps": {r.level: round(r.avg_steps, 2) for r in level_reports},
+        "disturbance_rates": {
+            r.level: {
+                "failed_slip": r.failure_counts.get("FAILED_SLIP", 0),
+                "failed_empty": r.failure_counts.get("FAILED_EMPTY", 0),
+            }
+            for r in level_reports
+        },
     }
     return {
         "novelty_signals": novelty_signals,
@@ -169,4 +176,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

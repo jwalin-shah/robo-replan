@@ -695,6 +695,7 @@ let playing  = false;
 let playTimer = null;
 let modelBusy = false;
 let lastModelRaw = '';
+let lastStepInfo = {};
 let recentActions = [];
 let recentRewards = [];
 let backendHealthy = true;
@@ -727,12 +728,16 @@ function normalizeObs(raw) {
     lastAction: raw.last_action || null,
     lastResult: raw.last_result || null,
     validActions: raw.valid_actions || [],
+    actionPreconditions: raw.action_preconditions || {},
     goalProgress: raw.goal_progress ?? 0,
     goalsRemaining: raw.goals_remaining ?? 0,
+    oracleHint: raw.oracle_hint || null,
     navMode: !!raw.nav_mode,
     gripperCell: raw.gripper_cell || null,
     gripperFacing: raw.gripper_facing || null,
     nextTargetCell: raw.next_target_cell || null,
+    distanceToNextGoal: raw.distance_to_next_goal ?? null,
+    deadlineStatus: raw.deadline_status || {},
     _objects: {},
     _gripperX: 0,
     _gripperY: 0.25,
@@ -759,14 +764,14 @@ async function apiReset() {
   const resp = await fetch(`/demo/reset?difficulty=${encodeURIComponent(ACTIVE_DIFFICULTY)}`, { method: 'POST' });
   if (!resp.ok) throw new Error(`reset failed ${resp.status}`);
   const data = await resp.json();
-  return { observation: normalizeObs(data.observation), reward: data.reward ?? 0, done: !!data.done };
+  return { observation: normalizeObs(data.observation), reward: data.reward ?? 0, done: !!data.done, info: data.info || {} };
 }
 
 async function apiStep(action) {
   const resp = await fetch(`/demo/step?action=${encodeURIComponent(action)}`, { method: 'POST' });
   if (!resp.ok) throw new Error(`step failed ${resp.status}`);
   const data = await resp.json();
-  return { observation: normalizeObs(data.observation), reward: data.reward ?? 0, done: !!data.done };
+  return { observation: normalizeObs(data.observation), reward: data.reward ?? 0, done: !!data.done, info: data.info || {} };
 }
 
 function renderManualButtons(validActions) {
@@ -853,6 +858,8 @@ function updateUI(obs, reward, done) {
     <div class="item con">Avg recent reward: ${avgRecentReward}</div>
     <div class="item con">Mode: ${obs.navMode ? 'Navigation' : 'Top-Down'}</div>
     <div class="item con">Next target cell: ${obs.nextTargetCell || 'n/a'}</div>
+    <div class="item con">Oracle counterfactual: ${(lastStepInfo && lastStepInfo.oracle_action) || obs.oracleHint || 'n/a'}</div>
+    <div class="item con">Deadlines: ${obs.deadlineStatus ? JSON.stringify(obs.deadlineStatus) : 'none'}</div>
     <div class="item con">Loop risk: ${loopRisk}</div>
   `;
   const rawEl = document.getElementById('raw-model');
@@ -923,6 +930,7 @@ async function manualStepAsync(action) {
   }
   totalReward += r.reward;
   stepCount++;
+  lastStepInfo = r.info || {};
   updateUI(r.observation, r.reward, r.done);
 }
 
@@ -931,6 +939,7 @@ function buildPolicyPrompt(obs) {
     .map(o => `${o.name}(${o.reachable ? 'reachable' : 'BLOCKED'})`)
     .join(', ');
   const valid = (obs.validActions && obs.validActions.length) ? obs.validActions.join(', ') : 'any';
+  const preconditions = obs.actionPreconditions ? JSON.stringify(obs.actionPreconditions) : '{}';
   const history = (obs.actionHistory && obs.actionHistory.length)
     ? obs.actionHistory.slice(-5).join(' -> ')
     : 'none';
@@ -952,6 +961,9 @@ function buildPolicyPrompt(obs) {
     + `History: ${history}\n`
     + `Last: ${obs.lastAction || 'none'} -> ${obs.lastResult || 'n/a'}\n`
     + `Valid now: ${valid}\n`
+    + `Preconditions: ${preconditions}\n`
+    + `Distance to next goal: ${obs.distanceToNextGoal ?? 'n/a'}\n`
+    + `Deadlines: ${JSON.stringify(obs.deadlineStatus || {})}\n`
     + `Steps left: ${obs.stepsRemaining}\n\n`
     + "Pick one action from Valid now. Output only the action name."
   );

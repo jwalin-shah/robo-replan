@@ -67,6 +67,7 @@ class TaskConfig:
     enable_distractor_actions: bool = True
     enable_partial_observability_zones: bool = True
     adversarial_sampling_prob: float = 0.0
+    scenario_pack: str = "default"
 
 
 @dataclass

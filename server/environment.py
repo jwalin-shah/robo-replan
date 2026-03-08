@@ -80,6 +80,78 @@ class TabletopPlanningEnv:
                     return self._object_cell(blocker.name)
         return None
 
+    def _distance_to_next_goal(self) -> Optional[int]:
+        cell = self._next_goal_cell()
+        if cell is None:
+            return None
+        gx, gy = self._gripper_cell()
+        tx, ty = cell
+        return abs(gx - tx) + abs(gy - ty)
+
+    def _valid_actions_with_reasons(self) -> dict[str, str]:
+        state = self.sim.get_state()
+        reasons = {"SCAN_SCENE": "refresh scene understanding"}
+        if self._nav_enabled():
+            reasons.update({
+                "MOVE_NORTH": "move gripper one cell north",
+                "MOVE_SOUTH": "move gripper one cell south",
+                "MOVE_EAST": "move gripper one cell east",
+                "MOVE_WEST": "move gripper one cell west",
+                "ROTATE_LEFT": "rotate gripper orientation left",
+                "ROTATE_RIGHT": "rotate gripper orientation right",
+            })
+        else:
+            for obj in state.objects.values():
+                if obj.reachable and not obj.is_held and obj.in_bin is None:
+                    color = obj.name.replace("_block", "").upper()
+                    reasons[f"MOVE_TO_{color}"] = f"navigate directly to {obj.name}"
+
+        if state.holding:
+            reasons["PLACE_BIN_A"] = "place held object in bin A"
+            reasons["PLACE_BIN_B"] = "place held object in bin B"
+        else:
+            for obj in state.objects.values():
+                if not (obj.reachable and not obj.is_held and obj.in_bin is None):
+                    continue
+                if self._nav_enabled() and not self._is_adjacent_to(obj.name):
+                    continue
+                reasons["PICK"] = f"pick reachable object ({obj.name})"
+                break
+
+        for obj in state.objects.values():
+            if not (obj.blocking and obj.reachable):
+                continue
+            if self._nav_enabled() and not self._is_adjacent_to(obj.name):
+                continue
+            reasons["CLEAR_BLOCKER"] = f"clear blocker ({obj.name})"
+            break
+        return reasons
+
+    def _deadline_status(self) -> dict[str, int]:
+        status = {}
+        deadlines = getattr(self._scenario_cfg, "deadlines", {}) or {}
+        for obj_name, deadline_step in deadlines.items():
+            obj = self.sim.get_state().objects.get(obj_name)
+            target_bin = self._required_placements.get(obj_name)
+            done = bool(obj and target_bin and obj.in_bin == target_bin)
+            if done:
+                continue
+            status[obj_name] = int(deadline_step - self._steps)
+        return status
+
+    def _observability_map(self) -> list[str]:
+        gx, gy = self._gripper_cell()
+        lines = []
+        for y in range(3, -4, -1):
+            row = []
+            for x in range(-3, 4):
+                if (x, y) == (gx, gy):
+                    row.append("G")
+                else:
+                    row.append(".")
+            lines.append("".join(row))
+        return lines
+
     def _nav_step_toward(self, target: tuple[int, int]) -> str:
         gx, gy = self._gripper_cell()
         tx, ty = target
@@ -117,8 +189,12 @@ class TabletopPlanningEnv:
             self._apply_mid_task_change()
 
         valid_now = self._valid_actions()
+        invalid_reason = None
         if action not in valid_now:
             raw_result = "FAILED_INVALID"
+            reasons = self._valid_actions_with_reasons()
+            if reasons:
+                invalid_reason = "invalid_now; choose one of: " + ", ".join(sorted(reasons.keys()))
         else:
             raw_result = self.sim.execute(action)
         result = self._apply_noise(action, raw_result)
@@ -175,6 +251,10 @@ class TabletopPlanningEnv:
                 "step": self._steps,
                 "oracle_action": oracle,
                 "valid_actions": self._valid_actions(),
+                "action_preconditions": self._valid_actions_with_reasons(),
+                "distance_to_next_goal": self._distance_to_next_goal(),
+                "deadline_status": self._deadline_status(),
+                "invalid_reason": invalid_reason,
                 "goal_progress": self._goal_progress(),
                 "mid_task_changed": self._mid_task_changed and self._steps == self.cfg.task.mid_task_change_step + 1,
                 "cumulative_reward": self._cumulative_reward,
@@ -195,6 +275,7 @@ class TabletopPlanningEnv:
             n_targets=random.randint(tc.n_targets_min, tc.n_targets_max),
             n_blockers=random.randint(tc.n_blockers_min, tc.n_blockers_max),
             force_blocked=force_blocked,
+            scenario_pack=getattr(tc, "scenario_pack", "default"),
         )
 
         self.sim._build_state_from_config(scenario_cfg)
@@ -328,6 +409,11 @@ class TabletopPlanningEnv:
             steps_saved = self.cfg.task.max_steps - self._steps
             r += w.efficiency_bonus_max * (steps_saved / self.cfg.task.max_steps)
             self._done = True
+
+        # Deadline pressure: penalize each overdue unfinished target.
+        for obj_name, remaining in self._deadline_status().items():
+            if remaining < 0:
+                r += (w.missed_deadline * 0.2)
 
         return r
 
@@ -566,6 +652,7 @@ class TabletopPlanningEnv:
         extra = {}
         if oc.include_valid_actions:
             extra["valid_actions"] = self._valid_actions()
+            extra["action_preconditions"] = self._valid_actions_with_reasons()
         if oc.include_goal_progress:
             extra["goal_progress"] = round(self._goal_progress(), 2)
         if oc.include_oracle_hint:
@@ -574,9 +661,13 @@ class TabletopPlanningEnv:
             remaining = sum(1 for n, b in self._required_placements.items()
                             if not (state.objects.get(n) and state.objects[n].in_bin == b))
             extra["goals_remaining"] = remaining
+            extra["distance_to_next_goal"] = self._distance_to_next_goal()
         goal_cell = self._next_goal_cell()
         if goal_cell is not None:
             extra["next_target_cell"] = f"{goal_cell[0]},{goal_cell[1]}"
+        extra["deadline_status"] = self._deadline_status()
+        extra["object_deadlines"] = getattr(self._scenario_cfg, "deadlines", {}) or {}
+        extra["observability_map"] = self._observability_map()
 
         return Observation(
             instruction=self._instruction,
