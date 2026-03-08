@@ -258,7 +258,7 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
         reasoning = extract_reasoning(text)
 
         if action is None:
-            rewards.append(-2.0)
+            rewards.append(-3.0)
             reward_fn._stats["total"] += 1
             reward_fn._stats["parse_fail"] += 1
             continue
@@ -293,9 +293,23 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
                 if pre.done:
                     break
 
+            valid_now = set(eval_env._valid_actions())
+            if action not in valid_now:
+                shaped_reward = -4.0
+                rewards.append(shaped_reward)
+                reward_fn._stats["invalid"] += 1
+                batch_actions.append(action)
+                batch_rewards.append(shaped_reward)
+                batch_results.append("FAILED_INVALID")
+                batch_oracles.append(eval_env._oracle_action())
+                continue
+
+            pre_progress = eval_env._goal_progress()
             oracle_action = eval_env._oracle_action()
             result = eval_env.step(action, reasoning=reasoning)
             shaped_reward = float(result.reward)
+            post_progress = eval_env._goal_progress()
+            progress_delta = max(0.0, post_progress - pre_progress)
 
             # Discourage no-op loops like MOVE_TO_X -> MOVE_TO_X after a successful move.
             if (
@@ -312,15 +326,24 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
 
             # Discourage no-op behavior and repeated identical actions.
             if action == 'SCAN_SCENE':
-                shaped_reward -= 0.4
+                shaped_reward -= 0.25
+                # Repeated scanning when oracle wants progress should be heavily discouraged.
+                if oracle_action and oracle_action != 'SCAN_SCENE':
+                    shaped_reward -= 1.25
+                else:
+                    shaped_reward += 0.1
             if last_action and action == last_action:
                 shaped_reward -= 0.5
 
             # Reward oracle alignment only when oracle action is in model action space.
             if oracle_action in ACTIONS and action == oracle_action:
-                shaped_reward += 1.0
+                shaped_reward += 2.0
             elif oracle_action in ACTIONS and action != oracle_action:
-                shaped_reward -= 0.3
+                shaped_reward -= 0.6
+
+            # Explicitly reward actual task progress.
+            if progress_delta > 0:
+                shaped_reward += 4.0 * progress_delta
 
             rewards.append(shaped_reward)
             batch_actions.append(action)
