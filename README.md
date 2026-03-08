@@ -98,9 +98,20 @@ The curriculum auto-advances when rolling success ≥ 75% across 20 episodes, an
 
 ---
 
-## Training Results (GRPO, Qwen2.5-1.5B-Instruct)
+## Training Results
 
 Training uses Group Relative Policy Optimization (GRPO) — no value function, just online RL against the live environment reward. Two phases: SFT warm-start on scripted demonstrations, then GRPO to exceed them.
+
+### Colab (Qwen2.5-0.5B-Instruct, free T4, ~40 min)
+
+| Metric | Before (random) | After (SFT + GRPO) |
+|---|---|---|
+| Success rate | **0%** | **78%** |
+| Avg reward / episode | **-29.9** | **+8.2** |
+
+Results from `train/colab_train.ipynb`. Chart saved as `training_results.png`.
+
+### H100 (Qwen2.5-1.5B-Instruct, Northflank, ~2 hr)
 
 | Difficulty | Random baseline | Post-GRPO |
 |---|---|---|
