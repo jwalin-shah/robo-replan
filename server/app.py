@@ -57,10 +57,45 @@ _VALID_ACTIONS = [a.value for a in EnvAction]
 
 def _extract_action(text: str) -> str:
     clean = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip().upper()
+    normalized = re.sub(r"[^A-Z_ ]+", " ", clean)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
     for action in sorted(_VALID_ACTIONS, key=len, reverse=True):
         if action in clean:
             return action
+    spaced_map = {a.replace("_", " "): a for a in _VALID_ACTIONS}
+    for spaced, action in spaced_map.items():
+        if spaced in normalized:
+            return action
     return "SCAN_SCENE"
+
+
+def _parse_valid_actions_from_prompt(prompt: str) -> list[str]:
+    m = re.search(r"Valid now:\s*(.*)", prompt, flags=re.IGNORECASE)
+    if not m:
+        return []
+    raw = m.group(1).strip()
+    if raw.lower() == "any":
+        return []
+    items = [x.strip().upper() for x in raw.split(",") if x.strip()]
+    return [a for a in items if a in _VALID_ACTIONS]
+
+
+def _fallback_action(valid: list[str]) -> str:
+    if not valid:
+        return "SCAN_SCENE"
+    priority = [
+        "PLACE_BIN_A", "PLACE_BIN_B",
+        "PICK",
+        "CLEAR_BLOCKER",
+        "MOVE_TO_RED", "MOVE_TO_BLUE", "MOVE_TO_GREEN", "MOVE_TO_YELLOW", "MOVE_TO_PURPLE",
+        "MOVE_NORTH", "MOVE_SOUTH", "MOVE_EAST", "MOVE_WEST",
+        "ROTATE_LEFT", "ROTATE_RIGHT",
+        "SCAN_SCENE",
+    ]
+    for p in priority:
+        if p in valid:
+            return p
+    return valid[0]
 
 
 def _get_policy_pipe():
@@ -135,6 +170,12 @@ def demo_policy_action(req: PolicyActionRequest):
         pipe = _get_policy_pipe()
         out = pipe(req.prompt, return_full_text=False, max_new_tokens=20, do_sample=False)[0]["generated_text"]
         action = _extract_action(out)
+        valid = _parse_valid_actions_from_prompt(req.prompt)
+        if valid and action not in valid:
+            action = _fallback_action(valid)
+        # Avoid no-op scan loops when other valid actions exist.
+        if valid and action == "SCAN_SCENE" and any(v != "SCAN_SCENE" for v in valid):
+            action = _fallback_action([v for v in valid if v != "SCAN_SCENE"])
         return {"action": action, "raw_output": out}
     except Exception as exc:
         # Fail soft so the UI can still run with manual/scripted controls.

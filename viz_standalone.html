@@ -970,8 +970,7 @@ async function modelStep() {
 async function playLoop() {
   if (!playing) return;
   if (currentDone) { await new Promise(res=>setTimeout(res,600)); await resetEpAsync(); return; }
-  const action = scriptedAgent(currentObs);
-  await manualStepAsync(action);
+  await modelStep();
   if (currentDone) {
     if (playing) playTimer = setTimeout(playLoop, 1000);
     return;
