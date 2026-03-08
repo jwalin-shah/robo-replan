@@ -241,9 +241,17 @@ def reward_fn(completions, prompts=None, scenario=None, **kwargs):
             if action == 'PICK' and last_action == 'PICK' and last_result and last_result.startswith('FAILED'):
                 shaped_reward -= 1.0
 
-            # Reward oracle alignment on this state to avoid collapsing to constant MOVE actions.
-            if oracle_action and action == oracle_action:
+            # Discourage no-op behavior and repeated identical actions.
+            if action == 'SCAN_SCENE':
+                shaped_reward -= 0.4
+            if last_action and action == last_action:
+                shaped_reward -= 0.5
+
+            # Reward oracle alignment only when oracle action is in model action space.
+            if oracle_action in ACTIONS and action == oracle_action:
                 shaped_reward += 1.0
+            elif oracle_action in ACTIONS and action != oracle_action:
+                shaped_reward -= 0.3
 
             rewards.append(shaped_reward)
             batch_actions.append(action)
@@ -275,9 +283,9 @@ grpo_config = GRPOConfig(
     per_device_train_batch_size=4,
     gradient_accumulation_steps=4,
     learning_rate=1e-5,
-    num_generations=8,
-    max_completion_length=8,
-    temperature=1.0,
+    num_generations=4,
+    max_completion_length=12,
+    temperature=0.85,
     logging_steps=5,
     save_steps=400,
     save_total_limit=2,
