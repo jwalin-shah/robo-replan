@@ -409,6 +409,15 @@ class TabletopPlanningEnv:
         completed = set(self._completed_subgoals)
         last_action = self._action_history[-1] if self._action_history else None
 
+        def can_clear_now() -> bool:
+            for obj in state.objects.values():
+                if not (obj.blocking and obj.reachable):
+                    continue
+                if self._nav_enabled() and not self._is_adjacent_to(obj.name):
+                    continue
+                return True
+            return False
+
         # Just moved to something → pick it
         if last_action and last_action.startswith("MOVE_TO"):
             return "PICK"
@@ -421,9 +430,9 @@ class TabletopPlanningEnv:
             return "PLACE_BIN_A"
 
         # Failed to reach a target → clear
-        if any(f.startswith("MOVE_TO") and "FAILED_BLOCKED" in f for f in failures):
+        if any(f.startswith("MOVE_TO") and "FAILED_BLOCKED" in f for f in failures) and can_clear_now():
             return "CLEAR_BLOCKER"
-        if "PICK:FAILED_EMPTY" in failures:
+        if "PICK:FAILED_EMPTY" in failures and can_clear_now():
             return "CLEAR_BLOCKER"
 
         # Work through required placements in order
