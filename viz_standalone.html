@@ -176,6 +176,8 @@ const INSTRUCTIONS = [
   "Place the purple block in bin A, then the red block in bin B.",
 ];
 const MAX_STEPS = 20;
+const URL_PARAMS = new URLSearchParams(window.location.search);
+const DIFFICULTY = (URL_PARAMS.get('difficulty') || 'medium').toLowerCase();
 
 function makeObject(name, x, y, reachable, blocking) {
   return { name, x, y, reachable, blocking: blocking||null, inBin: null, isHeld: false };
@@ -185,6 +187,7 @@ class Env {
   constructor() { this.reset(); }
 
   reset() {
+    this.navMode = (DIFFICULTY === 'hard');
     const blocked = Math.random() < 0.5;
     this.objects = {
       red_block:   makeObject('red_block',   0.10, 0.00, !blocked, null),
@@ -195,6 +198,7 @@ class Env {
     };
     this.gripperX = 0.00;
     this.gripperY = 0.25;
+    this.gripperFacing = 'N';
     this.holding  = null;
     this.steps    = 0;
     this.done     = false;
@@ -228,8 +232,23 @@ class Env {
   _execute(action) {
     const o = this.objects;
     if (action === 'SCAN_SCENE') return 'SUCCESS';
+    if (action === 'MOVE_NORTH') { this.gripperY = Math.min(0.35, this.gripperY + 0.1); return 'SUCCESS'; }
+    if (action === 'MOVE_SOUTH') { this.gripperY = Math.max(-0.25, this.gripperY - 0.1); return 'SUCCESS'; }
+    if (action === 'MOVE_EAST')  { this.gripperX = Math.min(0.35, this.gripperX + 0.1); return 'SUCCESS'; }
+    if (action === 'MOVE_WEST')  { this.gripperX = Math.max(-0.35, this.gripperX - 0.1); return 'SUCCESS'; }
+    if (action === 'ROTATE_LEFT') {
+      const dirs = ['N','W','S','E'];
+      this.gripperFacing = dirs[(dirs.indexOf(this.gripperFacing) + 1) % 4];
+      return 'SUCCESS';
+    }
+    if (action === 'ROTATE_RIGHT') {
+      const dirs = ['N','E','S','W'];
+      this.gripperFacing = dirs[(dirs.indexOf(this.gripperFacing) + 1) % 4];
+      return 'SUCCESS';
+    }
 
     if (['MOVE_TO_RED','MOVE_TO_BLUE','MOVE_TO_GREEN','MOVE_TO_YELLOW','MOVE_TO_PURPLE'].includes(action)) {
+      if (this.navMode) return 'FAILED_INVALID';
       const map = {
         MOVE_TO_RED:'red_block',
         MOVE_TO_BLUE:'blue_block',
@@ -338,18 +357,21 @@ class Env {
   _validActions() {
     const actions = ['SCAN_SCENE'];
     const o = this.objects;
+    if (this.navMode) actions.push('MOVE_NORTH','MOVE_SOUTH','MOVE_EAST','MOVE_WEST','ROTATE_LEFT','ROTATE_RIGHT');
 
     if (!this.holding) {
-      const moveMap = [
-        ['MOVE_TO_RED', 'red_block'],
-        ['MOVE_TO_BLUE', 'blue_block'],
-        ['MOVE_TO_GREEN', 'green_block'],
-        ['MOVE_TO_YELLOW', 'yellow_block'],
-        ['MOVE_TO_PURPLE', 'purple_block'],
-      ];
-      for (const [action, name] of moveMap) {
-        const obj = o[name];
-        if (obj && obj.reachable && !obj.inBin) actions.push(action);
+      if (!this.navMode) {
+        const moveMap = [
+          ['MOVE_TO_RED', 'red_block'],
+          ['MOVE_TO_BLUE', 'blue_block'],
+          ['MOVE_TO_GREEN', 'green_block'],
+          ['MOVE_TO_YELLOW', 'yellow_block'],
+          ['MOVE_TO_PURPLE', 'purple_block'],
+        ];
+        for (const [action, name] of moveMap) {
+          const obj = o[name];
+          if (obj && obj.reachable && !obj.inBin) actions.push(action);
+        }
       }
 
       let canPick = false;
@@ -389,6 +411,8 @@ class Env {
       activeConstraints: [...this.activeConstraints],
       actionHistory: [...this.actionHistory],
       validActions: this._validActions(),
+      navMode: this.navMode,
+      gripperFacing: this.gripperFacing,
       goalProgress,
       goalsRemaining: Math.max(0, totalGoals - completedGoals),
       lastAction, lastResult,
@@ -630,7 +654,12 @@ function drawSideView(obs) {
 // ─────────────────────────────────────────────────────────────────────
 //  UI
 // ─────────────────────────────────────────────────────────────────────
-const ACTIONS = ['SCAN_SCENE','MOVE_TO_RED','MOVE_TO_BLUE','MOVE_TO_GREEN','MOVE_TO_YELLOW','MOVE_TO_PURPLE','PICK','PLACE_BIN_A','PLACE_BIN_B','CLEAR_BLOCKER'];
+const ACTIONS = [
+  'SCAN_SCENE',
+  'MOVE_TO_RED','MOVE_TO_BLUE','MOVE_TO_GREEN','MOVE_TO_YELLOW','MOVE_TO_PURPLE',
+  'MOVE_NORTH','MOVE_SOUTH','MOVE_EAST','MOVE_WEST','ROTATE_LEFT','ROTATE_RIGHT',
+  'PICK','PLACE_BIN_A','PLACE_BIN_B','CLEAR_BLOCKER'
+];
 
 let env = new Env();
 let currentObs = null;
@@ -644,14 +673,19 @@ let modelBusy = false;
 let recentActions = [];
 let recentRewards = [];
 
-// Build manual buttons
-const grid = document.getElementById('manual-grid');
-ACTIONS.forEach(a => {
-  const b = document.createElement('button');
-  b.textContent = a.replace(/_/g,' ');
-  b.onclick = () => manualStep(a);
-  grid.appendChild(b);
-});
+function renderManualButtons(validActions) {
+  const grid = document.getElementById('manual-grid');
+  grid.innerHTML = '';
+  const valid = new Set(validActions || []);
+  for (const a of ACTIONS) {
+    const b = document.createElement('button');
+    b.textContent = a.replace(/_/g,' ');
+    b.disabled = !valid.has(a);
+    b.style.opacity = b.disabled ? '0.45' : '1';
+    b.onclick = () => manualStep(a);
+    grid.appendChild(b);
+  }
+}
 
 function updateUI(obs, reward, done) {
   currentObs = obs;
@@ -720,8 +754,11 @@ function updateUI(obs, reward, done) {
   document.getElementById('diag').innerHTML = `
     <div class="item con">Top recent action: ${top}</div>
     <div class="item con">Avg recent reward: ${avgRecentReward}</div>
+    <div class="item con">Mode: ${obs.navMode ? 'Navigation' : 'Top-Down'}</div>
     <div class="item con">Loop risk: ${loopRisk}</div>
   `;
+
+  renderManualButtons(obs.validActions);
 
   // done
   const ds = document.getElementById('done-sec');
@@ -775,7 +812,7 @@ function buildPolicyPrompt(obs) {
   const subgoals = (obs.completedSubgoals && obs.completedSubgoals.length) ? obs.completedSubgoals.join('; ') : 'none yet';
   return (
     "You are a robot planning agent on a tabletop. Choose ONE action.\n"
-    + "Actions: SCAN_SCENE | MOVE_TO_RED | MOVE_TO_BLUE | MOVE_TO_GREEN | MOVE_TO_YELLOW | MOVE_TO_PURPLE | PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER\n\n"
+    + "Actions: SCAN_SCENE | MOVE_TO_RED | MOVE_TO_BLUE | MOVE_TO_GREEN | MOVE_TO_YELLOW | MOVE_TO_PURPLE | MOVE_NORTH | MOVE_SOUTH | MOVE_EAST | MOVE_WEST | ROTATE_LEFT | ROTATE_RIGHT | PICK | PLACE_BIN_A | PLACE_BIN_B | CLEAR_BLOCKER\n\n"
     + `Instruction: ${obs.instruction}\n`
     + `Scene: ${objects}\n`
     + `Holding: ${obs.holding || 'nothing'}\n`
