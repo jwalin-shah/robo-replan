@@ -118,6 +118,30 @@ class PolicyActionRequest(BaseModel):
     prompt: str
     valid_actions: list[str] = []
 
+
+def _format_demo_step_response(step_out):
+    """
+    Compat for env implementations that return either:
+    - StepResult(observation, reward, done, info), or
+    - Observation(done, reward, ...)
+    """
+    if hasattr(step_out, "observation"):
+        obs = step_out.observation
+        return {
+            "observation": obs.model_dump(),
+            "reward": float(getattr(step_out, "reward", 0.0) or 0.0),
+            "done": bool(getattr(step_out, "done", False)),
+            "info": getattr(step_out, "info", {}) or {},
+        }
+    obs = step_out
+    return {
+        "observation": obs.model_dump(),
+        "reward": float(getattr(obs, "reward", 0.0) or 0.0),
+        "done": bool(getattr(obs, "done", False)),
+        "info": {},
+    }
+
+
 @app.post("/demo/reset")
 def demo_reset(difficulty: str = "easy"):
     """Start a fresh demo episode."""
@@ -135,12 +159,7 @@ def demo_step(action: str):
         _demo_env = RoboReplanEnv(difficulty="easy")
         _demo_env.reset()
     result = _demo_env.step(RoboAction(action=action))
-    return {
-        "observation": result.observation.model_dump(),
-        "reward": result.reward,
-        "done": result.done,
-        "info": result.info,
-    }
+    return _format_demo_step_response(result)
 
 
 @app.get("/demo/oracle")
@@ -152,13 +171,9 @@ def demo_oracle():
         _demo_env.reset()
     oracle = _demo_env._env._oracle_action() or "SCAN_SCENE"
     result = _demo_env.step(RoboAction(action=oracle))
-    return {
-        "action_taken": oracle,
-        "observation": result.observation.model_dump(),
-        "reward": result.reward,
-        "done": result.done,
-        "info": result.info,
-    }
+    payload = _format_demo_step_response(result)
+    payload["action_taken"] = oracle
+    return payload
 
 
 @app.post("/demo/policy_action")
