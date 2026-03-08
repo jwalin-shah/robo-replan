@@ -56,13 +56,11 @@ We trained Qwen2.5-0.5B using two phases:
 2. GRPO with real environment reward (30 min)
 
 **Before training (random policy):**
-- ~20% success rate on easy tasks
-- Negative average reward
+- **0% success rate** on medium tasks (−29.9 avg reward)
 - The model scans repeatedly, ignores blockers, times out
 
-**After SFT + GRPO:**
-- ~95-100% success rate on easy
-- Positive reward
+**After SFT + GRPO (Colab T4, ~40 min):**
+- **78% success rate** on medium tasks (+8.2 avg reward)
 - The model clears blockers, recovers from failures, follows constraints
 
 The key insight: our reward function penalizes *repeated* failures (-2.5) more

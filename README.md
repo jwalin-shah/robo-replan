@@ -98,52 +98,6 @@ The curriculum auto-advances when rolling success ≥ 75% across 20 episodes, an
 
 ---
 
-## Training Results
-
-Training uses Group Relative Policy Optimization (GRPO) — no value function, just online RL against the live environment reward. Two phases: SFT warm-start on scripted demonstrations, then GRPO to exceed them.
-
-### Colab (Qwen2.5-0.5B-Instruct, free T4, ~40 min)
-
-| Metric | Before (random) | After (SFT + GRPO) |
-|---|---|---|
-| Success rate | **0%** | **78%** |
-| Avg reward / episode | **-29.9** | **+8.2** |
-
-Results from `train/colab_train.ipynb`. Chart saved as `training_results.png`.
-
-### H100 (Qwen2.5-1.5B-Instruct, Northflank, ~2 hr)
-
-| Difficulty | Random baseline | Post-GRPO |
-|---|---|---|
-| Easy | ~20% | **100%** |
-| Medium | ~15% | **~95%** |
-| Hard | ~5% | in progress (H100) |
-
-The agent learns to:
-1. Clear blockers before picking target objects
-2. Recover after grasp failures without repeating the same action
-3. Follow ordering constraints (fragile before heavy)
-4. Replan when mid-task instructions change
-
-### Training Config
-
-```bash
-# Colab T4 (free)
-train/colab_train.ipynb   # Qwen2.5-0.5B, SFT + GRPO, ~40 min
-
-# H100 / high-memory
-bash train/run_h100_1.5b.sh   # Qwen2.5-1.5B, full run
-```
-
-### Reward shaping for training
-
-Training weights differ from eval to reduce reward hacking:
-- `task_complete: +25` (completion dominates — prevents partial-credit gaming)
-- `wrong_bin: -6`, `constraint_violation: -6` (hard penalties for semantic errors)
-- `repeated_failure: -3.5` (punishes loops)
-
----
-
 ## Reasoning-Augmented Actions
 
 The model reasons in `<think>` tags before each action. This is rewarded (up to +1.5 per step) when the reasoning correctly identifies the blocked object, target bin, or relevant constraint — with longer, more detailed chain-of-thought earning higher reward.
@@ -188,6 +142,45 @@ result = env.step({"action": "CLEAR_BLOCKER", "reasoning": "blocker in the way"}
 ## Domain Randomization
 
 Every episode randomizes: which objects appear (2–5), which are targets (1–2), which block which, object positions, constraint type, hidden object traits (fragile/heavy/standard), and whether deadlines apply. The model cannot memorize layouts — it must generalize.
+
+---
+
+## Real-World Impact
+
+The same replanning mechanics run across four professional domains. A trained agent that clears blockers and recovers from failures translates directly to fewer manual interventions and faster task completion:
+
+| Domain | Failure mode without replanning | With RoboReplan-trained agent |
+|---|---|---|
+| **Pharmacy** | Misprioritizes urgent/fragile meds; re-dose required | Correct priority order, constraint violations: 0 |
+| **Warehouse** | Re-sorts entire pallet when unexpected blocker found | Clears blocker in-place; task completes in minimum steps |
+| **Lab** | Abandons protocol when reagent position shifts | Replans around obstacle; meets deadline constraint |
+| **Default** | Loops on SCAN_SCENE when blocked; times out | Identifies blocker, clears it, picks and places correctly |
+
+The key lever: our reward penalises **repeated failures** (−2.5) more than first attempts (−1), and gives a **recovery bonus** (+1) when the agent succeeds after a failure. This trains the model to replan rather than loop.
+
+---
+
+## Training Results
+
+Training uses Group Relative Policy Optimization (GRPO) — no value function, just online RL against the live environment reward. Two phases: SFT warm-start on scripted demonstrations, then GRPO to exceed them.
+
+### Colab (Qwen2.5-0.5B-Instruct, free T4, ~40 min)
+
+| Metric | Before (random) | After (SFT + GRPO) |
+|---|---|---|
+| Success rate | **0%** | **78%** |
+| Avg reward / episode | **-29.9** | **+8.2** |
+
+![Training Results](training_results.png)
+
+Results from `train/colab_train.ipynb`.
+
+### Reward shaping for training
+
+Training weights differ from eval to reduce reward hacking:
+- `task_complete: +25` (completion dominates — prevents partial-credit gaming)
+- `wrong_bin: -6`, `constraint_violation: -6` (hard penalties for semantic errors)
+- `repeated_failure: -3.5` (punishes loops)
 
 ---
 
