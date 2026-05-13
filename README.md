@@ -187,6 +187,14 @@ Training weights differ from eval to reduce reward hacking:
 - **Training**: GRPO via `train/colab_train.ipynb` (Colab T4) or `train/run_h100_1.5b.sh` (H100)
 - **Problem statement**: 3.1 — World Modeling, Professional Tasks
 
+### Evidence artifacts
+
+The checked-in files under `logs/` are curated portfolio evidence. Runtime
+episodes now append to ignored `logs/episodes.local.jsonl` by default so local
+demo or training runs do not mutate the committed evidence fixture. See
+[`docs/EVIDENCE_ARTIFACTS.md`](./docs/EVIDENCE_ARTIFACTS.md) for the artifact
+contract and validation command.
+
 ### Submission evidence
 
 - Scripted ceiling: 100% easy, ~98% medium, ~87% hard (verified, 270 Hard episodes)
