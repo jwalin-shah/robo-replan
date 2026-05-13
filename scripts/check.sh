@@ -26,3 +26,4 @@ export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "$ROOT/logs"
 python3 scripts/smoke_env.py
 python3 scripts/check_invariants.py
+python3 scripts/check_arch_contracts.py

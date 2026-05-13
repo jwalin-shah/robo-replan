@@ -13,9 +13,12 @@ truth.
 Current log policy:
 
 - `server/config.py` is the source of truth for logging knobs.
+- `server/environment.py` passes logging config into the runtime logger.
 - `server/logger.py` owns the JSONL episode schema.
 - `scripts/*report*.py`, `scripts/*benchmark*.py`, and eval scripts produce
   generated evidence artifacts.
+- `scripts/check.sh` preserves `logs/episodes.jsonl` while validation exercises
+  the environment.
 - Operations and validation changes should avoid committing incidental log
   rewrites. If a log needs to change, state the command, seed or episode count,
   and expected evidence claim.
