@@ -26,8 +26,8 @@ def require(condition: bool, message: str) -> None:
 def check_episode_evidence_contract() -> None:
     cfg = EnvConfig.easy()
     require(
-        cfg.log.export_path == "logs/episodes.jsonl",
-        "LogConfig.export_path default must remain logs/episodes.jsonl",
+        cfg.log.export_path == "logs/episodes.local.jsonl",
+        "LogConfig.export_path default must remain logs/episodes.local.jsonl",
     )
 
     env = TabletopPlanningEnv(config=cfg)
@@ -112,6 +112,7 @@ def check_episode_evidence_contract() -> None:
         "server/environment.py",
         "server/logger.py",
         "logs/episodes.jsonl",
+        "logs/episodes.local.jsonl",
         "scripts/check.sh",
     ]
     for marker in required_docs:

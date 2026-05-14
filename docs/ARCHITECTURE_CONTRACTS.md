@@ -11,7 +11,8 @@ Runtime episode evidence flows through one path:
 2. `server/environment.py` passes `EnvConfig.log.export_path` into `EpisodeLogger`.
 3. `server/logger.py` owns the JSONL episode schema and append-only write.
 4. `logs/episodes.jsonl` is committed evidence, not source code.
-5. `scripts/check.sh` must preserve `logs/episodes.jsonl` while smoke tests run.
+5. `logs/episodes.local.jsonl` is the ignored default runtime sink.
+6. `scripts/check.sh` must preserve `logs/episodes.jsonl` while smoke tests run.
 
 Validation: `scripts/check_arch_contracts.py` checks this route against the code
-and documentation. Run it through `bash scripts/check.sh`.
+and documentation. Run the full local gate with `bash scripts/check.sh`.
