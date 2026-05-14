@@ -277,8 +277,7 @@ class TabletopPlanningEnv:
 
         done = self._check_done()
         if done:
-            ep = self.logger.end_episode(success=self._all_goals_complete())
-            self.logger.metrics._current_difficulty = self.cfg.log.export_path  # track level
+            self.logger.end_episode(success=self._all_goals_complete())
 
         obs = self._build_obs(last_action=action, last_result=result)
         return StepResult(

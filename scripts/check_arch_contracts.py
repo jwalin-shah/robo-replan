@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from server.config import EnvConfig
 from server.environment import TabletopPlanningEnv
 from server.logger import EpisodeLog, EpisodeLogger, StepLog
-
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def read(relative_path: str) -> str:
@@ -36,7 +37,7 @@ def check_episode_evidence_contract() -> None:
         "TabletopPlanningEnv must use EpisodeLogger for runtime evidence",
     )
     require(
-        env.logger._export_path == cfg.log.export_path,
+        env.logger.export_path == cfg.log.export_path,
         "TabletopPlanningEnv must pass EnvConfig.log.export_path to EpisodeLogger",
     )
 
@@ -102,6 +103,10 @@ def check_episode_evidence_contract() -> None:
         require(
             json.loads(lines[0])["episode_id"] == 7,
             "EpisodeLogger must write the ended episode to the configured path",
+        )
+        require(
+            logger.metrics.to_dict()["current_difficulty"] == "medium",
+            "EpisodeLogger metrics must derive current_difficulty from ended episodes",
         )
 
     context = read("CONTEXT.md")
