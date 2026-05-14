@@ -112,9 +112,67 @@ def run_mid_task_change_regression():
     print("[mid_task_change] completed-target regression passed")
 
 
+def run_action_availability_contract_regression():
+    cfg = EnvConfig.easy()
+    cfg.task.n_objects_min = 2
+    cfg.task.n_objects_max = 2
+    cfg.task.n_targets_min = 1
+    cfg.task.n_targets_max = 1
+    cfg.task.n_blockers_min = 1
+    cfg.task.n_blockers_max = 1
+    cfg.task.force_blocked_prob = 1.0
+    cfg.realism.grasp_fail_prob = 0.0
+    cfg.realism.clear_partial_prob = 0.0
+    cfg.realism.object_drift_prob = 0.0
+    cfg.log.log_every_step = False
+
+    scenario = ScenarioConfig(
+        objects=["red_block", "blue_block"],
+        targets={"red_block": "A"},
+        blockers={"blue_block": "red_block"},
+        distractors=["blue_block"],
+        constraint=None,
+        instruction="Place the red block in bin A.",
+        positions={"red_block": (0.0, -0.05), "blue_block": (0.0, 0.05)},
+        hidden_traits={},
+        deadlines={},
+    )
+
+    original_randomize = environment_module.randomize_scenario
+    try:
+        environment_module.randomize_scenario = lambda **_: scenario
+
+        env = TabletopPlanningEnv(config=cfg)
+        obs = env.reset()
+        assert list(env._valid_actions_with_reasons().keys()) == env._valid_actions(), (
+            "valid action list must be derived from action reasons"
+        )
+        assert "CLEAR_BLOCKER" in (obs.valid_actions or [])
+
+        moved = env.step("MOVE_TO_BLUE")
+        assert moved.info["result"] == "SUCCESS"
+        picked = env.step("PICK")
+        assert picked.info["result"] == "SUCCESS"
+        assert picked.observation.holding == "blue_block"
+
+        reasoned = env._valid_actions_with_reasons()
+        listed = env._valid_actions()
+        assert list(reasoned.keys()) == listed, (
+            f"valid action list drifted from reasons: reasons={reasoned}, list={listed}"
+        )
+        assert "CLEAR_BLOCKER" not in reasoned, (
+            "CLEAR_BLOCKER must not be available while holding an object"
+        )
+    finally:
+        environment_module.randomize_scenario = original_randomize
+
+    print("[action_availability] reasoned valid-action contract passed")
+
+
 def main():
     random.seed(1337)
     run_mid_task_change_regression()
+    run_action_availability_contract_regression()
     run("easy", EnvConfig.easy())
     run("medium", EnvConfig.medium())
     run("hard", EnvConfig.hard())
