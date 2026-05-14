@@ -36,6 +36,8 @@ Expected result:
 - All tracked JSON and JSONL evidence files parse.
 - Required summary fields and episode fields are present.
 - `LogConfig` defaults to the ignored local runtime JSONL path.
+- A default runtime episode writes `logs/episodes.local.jsonl`, not
+  `logs/episodes.jsonl`.
 - No ignored local runtime JSONL file is tracked.
 - `server/`, `scripts/`, and `train/` compile.
 - `git diff --check` passes.
