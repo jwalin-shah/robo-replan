@@ -7,8 +7,14 @@ Run:
 """
 from __future__ import annotations
 
+import argparse
 from collections import Counter
+from pathlib import Path
 import random
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from server.config import EnvConfig
 from server.environment import TabletopPlanningEnv
@@ -16,6 +22,16 @@ from server.models import Action
 
 
 ALL_ACTIONS = {a.value for a in Action}
+LEVELS = {
+    "easy": EnvConfig.easy,
+    "medium": EnvConfig.medium,
+    "hard": EnvConfig.hard,
+}
+FLOORS = {
+    "easy": 0.50,
+    "medium": 0.40,
+    "hard": 0.05,
+}
 
 
 def run_episode(env: TabletopPlanningEnv, max_steps: int = 20):
@@ -106,19 +122,52 @@ def test_manual_move_then_pick():
     raise AssertionError("No episode in 30 resets had a reachable object to MOVE_TO then PICK")
 
 
-def main():
-    random.seed(1337)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run no-secret RoboReplan CLI smoke checks.",
+    )
+    parser.add_argument(
+        "--difficulty",
+        choices=(*LEVELS, "all"),
+        default="all",
+        help="difficulty level to smoke, or all levels",
+    )
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=40,
+        help="episodes per selected difficulty",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=1337,
+        help="random seed for reproducible smoke runs",
+    )
+    args = parser.parse_args()
+    if args.episodes < 1:
+        parser.error("--episodes must be at least 1")
+    return args
+
+
+def selected_levels(difficulty: str) -> list[str]:
+    if difficulty == "all":
+        return list(LEVELS)
+    return [difficulty]
+
+
+def main() -> None:
+    args = parse_args()
+    random.seed(args.seed)
     print("Running environment smoke tests...")
     print("  Testing manual MOVE_TO → PICK flow...")
     test_manual_move_then_pick()
-    sr_easy = check_level("easy", EnvConfig.easy(), episodes=40)
-    sr_med = check_level("medium", EnvConfig.medium(), episodes=40)
-    sr_hard = check_level("hard", EnvConfig.hard(), episodes=40)
-
-    # Soft floors to catch severe regressions.
-    assert sr_easy >= 0.50, f"easy oracle regression: {sr_easy:.2%}"
-    assert sr_med >= 0.40, f"medium oracle regression: {sr_med:.2%}"
-    assert sr_hard >= 0.05, f"hard oracle regression: {sr_hard:.2%}"
+    for level in selected_levels(args.difficulty):
+        success_rate = check_level(level, LEVELS[level](), episodes=args.episodes)
+        # Soft floors to catch severe regressions.
+        assert success_rate >= FLOORS[level], (
+            f"{level} oracle regression: {success_rate:.2%}"
+        )
     print("Smoke tests passed.")
 
 
