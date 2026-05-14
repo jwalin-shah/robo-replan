@@ -99,7 +99,8 @@ class TabletopPlanningEnv:
         tx, ty = cell
         return abs(gx - tx) + abs(gy - ty)
 
-    def _valid_actions_with_reasons(self) -> dict[str, str]:
+    def _available_action_reasons(self) -> dict[str, str]:
+        """Action availability rules, with domain reasons for each available action."""
         state = self.sim.get_state()
         reasons = {"SCAN_SCENE": "refresh scene understanding"}
         if self._nav_enabled():
@@ -127,14 +128,18 @@ class TabletopPlanningEnv:
                 reasons["PICK"] = f"pick reachable object ({obj.name})"
                 break
 
-        for obj in state.objects.values():
-            if not (obj.blocking and obj.reachable):
-                continue
-            if self._nav_enabled() and not self._is_adjacent_to(obj.name):
-                continue
-            reasons["CLEAR_BLOCKER"] = f"clear blocker ({obj.name})"
-            break
+        if not state.holding:
+            for obj in state.objects.values():
+                if not (obj.blocking and obj.reachable):
+                    continue
+                if self._nav_enabled() and not self._is_adjacent_to(obj.name):
+                    continue
+                reasons["CLEAR_BLOCKER"] = f"clear blocker ({obj.name})"
+                break
         return reasons
+
+    def _valid_actions_with_reasons(self) -> dict[str, str]:
+        return self._available_action_reasons()
 
     def _deadline_status(self) -> dict[str, int]:
         status = {}
@@ -599,38 +604,7 @@ class TabletopPlanningEnv:
 
     def _valid_actions(self) -> list[str]:
         """Which actions make sense right now given the current state."""
-        state = self.sim.get_state()
-        valid = ["SCAN_SCENE"]
-
-        if self._nav_enabled():
-            valid += ["MOVE_NORTH", "MOVE_SOUTH", "MOVE_EAST", "MOVE_WEST", "ROTATE_LEFT", "ROTATE_RIGHT"]
-        else:
-            for obj in state.objects.values():
-                if obj.reachable and not obj.is_held and obj.in_bin is None:
-                    color = obj.name.replace("_block", "").upper()
-                    valid.append(f"MOVE_TO_{color}")
-
-        if state.holding:
-            valid += ["PLACE_BIN_A", "PLACE_BIN_B"]
-        else:
-            has_pick = False
-            for obj in state.objects.values():
-                if self._can_pick_object(obj.name):
-                    has_pick = True
-                    break
-            if has_pick:
-                valid.append("PICK")
-
-        if not state.holding:  # can't clear a blocker while holding something
-            for obj in state.objects.values():
-                if not (obj.blocking and obj.reachable):
-                    continue
-                if self._nav_enabled() and not self._is_adjacent_to(obj.name):
-                    continue
-                valid.append("CLEAR_BLOCKER")
-                break
-
-        return valid
+        return list(self._available_action_reasons().keys())
 
     # ── Goal progress ────────────────────────────────────────────────────
 
