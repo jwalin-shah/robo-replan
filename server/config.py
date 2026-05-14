@@ -112,7 +112,7 @@ class LogConfig:
     log_every_step: bool = True
     log_episode_summary: bool = True
     max_episode_history: int = 200      # keep last N episodes in memory
-    export_path: Optional[str] = "logs/episodes.jsonl"
+    export_path: Optional[str] = "logs/episodes.local.jsonl"
 
 
 @dataclass
