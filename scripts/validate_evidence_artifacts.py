@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -91,6 +93,7 @@ def validate_summary_artifacts() -> None:
 
 def validate_runtime_log_contract() -> None:
     from server.config import EnvConfig
+    from server.environment import TabletopPlanningEnv
 
     export_path = EnvConfig().log.export_path
     require(export_path == "logs/episodes.local.jsonl", "default export_path must be local JSONL")
@@ -103,6 +106,25 @@ def validate_runtime_log_contract() -> None:
         text=True,
     ).stdout.strip()
     require(not tracked, "local runtime JSONL files must not be tracked")
+
+    original_cwd = Path.cwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            os.chdir(tmp)
+            cfg = EnvConfig.easy()
+            cfg.task.max_steps = 1
+            env = TabletopPlanningEnv(config=cfg)
+            env.step("SCAN_SCENE")
+        finally:
+            os.chdir(original_cwd)
+
+        local_runtime_log = Path(tmp) / export_path
+        tracked_fixture_log = Path(tmp) / "logs/episodes.jsonl"
+        require(local_runtime_log.exists(), "default runtime run must write local JSONL")
+        require(
+            not tracked_fixture_log.exists(),
+            "default runtime run must not write the tracked evidence fixture path",
+        )
 
 
 def main() -> None:
