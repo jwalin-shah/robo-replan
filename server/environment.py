@@ -574,7 +574,15 @@ class TabletopPlanningEnv:
     def _apply_mid_task_change(self):
         """Swap one target's bin. Agent must replan."""
         from .robosim.randomizer import BINS
-        targets = list(self._required_placements.items())
+        state = self.sim.get_state()
+        targets = [
+            (obj_name, bin_name)
+            for obj_name, bin_name in self._required_placements.items()
+            if not (
+                state.objects.get(obj_name)
+                and state.objects[obj_name].in_bin == bin_name
+            )
+        ] or list(self._required_placements.items())
         if not targets:
             return
         obj_name, old_bin = random.choice(targets)
