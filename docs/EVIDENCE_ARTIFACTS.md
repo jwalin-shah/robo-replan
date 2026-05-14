@@ -22,17 +22,20 @@ become portfolio evidence, promote a small reviewed sample into
 
 ## Validation
 
-Run:
+The authoritative local validation gate is:
 
 ```bash
-python3 scripts/validate_evidence_artifacts.py
-python3 -m compileall server scripts train
-git diff --check
+bash scripts/check.sh
 ```
 
 Expected result:
 
+- Environment smoke tests pass across easy, medium, and hard levels.
+- Action invariant checks reject invalid actions and accept valid actions.
+- Architecture contracts match the runtime logging path.
 - All tracked JSON and JSONL evidence files parse.
 - Required summary fields and episode fields are present.
 - `LogConfig` defaults to the ignored local runtime JSONL path.
 - No ignored local runtime JSONL file is tracked.
+- `server/`, `scripts/`, and `train/` compile.
+- `git diff --check` passes.

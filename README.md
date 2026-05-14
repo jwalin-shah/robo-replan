@@ -193,7 +193,7 @@ The checked-in files under `logs/` are curated portfolio evidence. Runtime
 episodes now append to ignored `logs/episodes.local.jsonl` by default so local
 demo or training runs do not mutate the committed evidence fixture. See
 [`docs/EVIDENCE_ARTIFACTS.md`](./docs/EVIDENCE_ARTIFACTS.md) for the artifact
-contract and validation command.
+contract and authoritative local validation gate: `bash scripts/check.sh`.
 
 ### Submission evidence
 
