@@ -25,6 +25,11 @@ cd "$ROOT"
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "$ROOT/logs"
 python3 scripts/smoke_env.py
+if python3 scripts/smoke_env.py --difficulty impossible >"$TMP_DIR/smoke-bad-input.txt" 2>&1; then
+  echo "smoke_env.py accepted an invalid difficulty" >&2
+  exit 1
+fi
+grep -q "invalid choice" "$TMP_DIR/smoke-bad-input.txt"
 python3 scripts/check_invariants.py
 python3 scripts/check_arch_contracts.py
 python3 scripts/validate_evidence_artifacts.py
