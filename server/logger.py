@@ -91,6 +91,7 @@ class MetricsTracker:
     def record(self, ep: EpisodeLog):
         self._history.append(ep)
         self._episode_count += 1
+        self._current_difficulty = ep.difficulty
 
     def rolling_success_rate(self) -> float:
         recent = list(self._history)[-self.window:]
@@ -181,6 +182,10 @@ class EpisodeLogger:
         self._export_path = export_path
         if export_path:
             os.makedirs(os.path.dirname(export_path), exist_ok=True)
+
+    @property
+    def export_path(self) -> Optional[str]:
+        return self._export_path
 
     def begin_episode(self, episode_id: int, instruction: str, difficulty: str,
                       n_objects: int, n_blockers: int, n_targets: int,
